@@ -1,4 +1,4 @@
-"""The custom_metrics services: add_record, export_records, import_records."""
+"""The custom_records services: add_record, export_records, import_records."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
 
     from .models import RecordType
-    from .runtime_data import CustomMetricsRuntimeData
+    from .runtime_data import CustomRecordsRuntimeData
 
 # CSV export/import `path` service params are restricted to this extension,
 # same allow-listed-root protection as IMAGE field source paths.
@@ -66,18 +66,18 @@ SERVICE_IMPORT_RECORDS_SCHEMA = vol.Schema(
 )
 
 
-def _get_runtime_data(hass: HomeAssistant) -> CustomMetricsRuntimeData:
+def _get_runtime_data(hass: HomeAssistant) -> CustomRecordsRuntimeData:
     """Return the runtime data for the (single) loaded config entry."""
     entries = hass.config_entries.async_entries(DOMAIN)
     loaded = [entry for entry in entries if entry.state is ConfigEntryState.LOADED]
     if not loaded:
-        msg = "Custom Metrics Recorder is not set up"
+        msg = "Custom Records is not set up"
         raise ServiceValidationError(msg)
     return loaded[0].runtime_data
 
 
 def _get_record_type(
-    runtime_data: CustomMetricsRuntimeData, record_type_id: str
+    runtime_data: CustomRecordsRuntimeData, record_type_id: str
 ) -> RecordType:
     """Return the RecordType for record_type_id, or raise ServiceValidationError."""
     record_type = runtime_data.record_types.get(record_type_id)
@@ -119,7 +119,7 @@ def _import_from_path(hass: HomeAssistant, path: str) -> str:
 
 
 async def _async_add_record(call: ServiceCall) -> ServiceResponse:
-    """Handle the custom_metrics.add_record service call."""
+    """Handle the custom_records.add_record service call."""
     runtime_data = _get_runtime_data(call.hass)
     record_type_id = call.data[ATTR_RECORD_TYPE]
     record_type = _get_record_type(runtime_data, record_type_id)
@@ -142,7 +142,7 @@ async def _async_add_record(call: ServiceCall) -> ServiceResponse:
 
 
 async def _async_export_records(call: ServiceCall) -> ServiceResponse:
-    """Handle the custom_metrics.export_records service call."""
+    """Handle the custom_records.export_records service call."""
     runtime_data = _get_runtime_data(call.hass)
     record_type_id = call.data[ATTR_RECORD_TYPE]
     record_type = _get_record_type(runtime_data, record_type_id)
@@ -166,7 +166,7 @@ async def _async_export_records(call: ServiceCall) -> ServiceResponse:
 
 
 async def _async_import_records(call: ServiceCall) -> ServiceResponse:
-    """Handle the custom_metrics.import_records service call."""
+    """Handle the custom_records.import_records service call."""
     runtime_data = _get_runtime_data(call.hass)
     record_type_id = call.data[ATTR_RECORD_TYPE]
     record_type = _get_record_type(runtime_data, record_type_id)
@@ -200,7 +200,7 @@ async def _async_import_records(call: ServiceCall) -> ServiceResponse:
 
 
 def async_setup_services(hass: HomeAssistant) -> None:
-    """Register the custom_metrics services (module-level, hass-wide)."""
+    """Register the custom_records services (module-level, hass-wide)."""
     if hass.services.has_service(DOMAIN, SERVICE_ADD_RECORD):
         return
     hass.services.async_register(

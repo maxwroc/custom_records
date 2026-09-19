@@ -1,5 +1,5 @@
 {
-    "name": "maxwroc/custom_metrics",
+    "name": "maxwroc/custom_records",
     "image": "mcr.microsoft.com/devcontainers/base:debian",
     "postCreateCommand": "scripts/setup",
     "forwardPorts": [

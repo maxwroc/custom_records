@@ -1,5 +1,5 @@
 """
-Storage layer for custom_metrics: one SQLite database per config entry.
+Storage layer for custom_records: one SQLite database per config entry.
 
 Callers (services.py, websocket_api.py, config_flow.py, media_source.py,
 media_store.py, __init__.py) never execute SQL directly - they call these
@@ -277,7 +277,7 @@ def _open_sync(db_path: Path) -> tuple[sqlite3.Connection, bool]:
     elif version > DB_SCHEMA_VERSION:
         conn.close()
         msg = (
-            f"Custom Metrics database schema version {version} is newer than "
+            f"Custom Records database schema version {version} is newer than "
             f"supported ({DB_SCHEMA_VERSION}); refusing to open it"
         )
         raise SchemaError(msg)
@@ -542,7 +542,7 @@ class RecordStorage:
             )
         )
         self._executor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix=f"custom_metrics_db_{entry_id}"
+            max_workers=1, thread_name_prefix=f"custom_records_db_{entry_id}"
         )
         self._conn: sqlite3.Connection | None = None
         self._record_types: dict[str, RecordType] = {}

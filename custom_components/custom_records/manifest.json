@@ -1,6 +1,6 @@
 {
-  "domain": "custom_metrics",
-  "name": "Custom Metrics Recorder",
+  "domain": "custom_records",
+  "name": "Custom Records",
   "codeowners": [
     "@maxwroc"
   ],
@@ -10,10 +10,10 @@
     "frontend",
     "file_upload"
   ],
-  "documentation": "https://github.com/maxwroc/custom_metrics",
+  "documentation": "https://github.com/maxwroc/custom_records",
   "integration_type": "hub",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/maxwroc/custom_metrics/issues",
+  "issue_tracker": "https://github.com/maxwroc/custom_records/issues",
   "single_config_entry": true,
   "version": "0.1.0"
 }

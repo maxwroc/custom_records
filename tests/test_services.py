@@ -1,4 +1,4 @@
-"""Tests for the custom_metrics services: add_record, export_records, import_records."""
+"""Tests for the custom_records services: add_record, export_records, import_records."""
 
 # pyright: reportArgumentType=false
 # pyright: reportAttributeAccessIssue=false
@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.setup import async_setup_component
 
-from custom_components.custom_metrics.const import (
+from custom_components.custom_records.const import (
     DOMAIN,
     SERVICE_ADD_RECORD,
     SERVICE_EXPORT_RECORDS,
@@ -54,7 +54,9 @@ IMAGE_RECORD_TYPE = {
 async def test_service_registered_even_without_entry(hass: HomeAssistant) -> None:
     """The service is registered at component setup, independent of any entry."""
     assert await async_setup_component(hass, DOMAIN, {})
-    assert hass.services.has_service(DOMAIN, SERVICE_ADD_RECORD)
+    for service in ("add_record", "export_records", "import_records"):
+        assert hass.services.has_service("custom_records", service)
+        assert not hass.services.has_service("custom_metrics", service)
 
 
 async def test_add_record_happy_path(hass: HomeAssistant) -> None:
@@ -127,7 +129,7 @@ async def test_add_record_stores_image_reference_not_raw_path(
         return_response=True,
     )
 
-    expected_media_source = f"media-source://custom_metrics/pets/{response['id']}/photo"
+    expected_media_source = f"media-source://custom_records/pets/{response['id']}/photo"
     assert response["photo"] == {"media_source": expected_media_source}
 
 

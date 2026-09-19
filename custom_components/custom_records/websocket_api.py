@@ -64,7 +64,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from .models import RecordType
-    from .runtime_data import CustomMetricsRuntimeData
+    from .runtime_data import CustomRecordsRuntimeData
 
 _WS_REGISTERED_KEY = f"{DOMAIN}_ws_registered"
 
@@ -81,14 +81,14 @@ def _parse_datetime(value: str) -> datetime:
     return parsed
 
 
-def _get_runtime_data(hass: HomeAssistant) -> CustomMetricsRuntimeData | None:
+def _get_runtime_data(hass: HomeAssistant) -> CustomRecordsRuntimeData | None:
     """Return the runtime data for the (single) loaded config entry, if any."""
     entries = hass.config_entries.async_entries(DOMAIN)
     loaded = [entry for entry in entries if entry.state is ConfigEntryState.LOADED]
     return loaded[0].runtime_data if loaded else None
 
 
-@websocket_command({vol.Required("type"): "custom_metrics/list_record_types"})
+@websocket_command({vol.Required("type"): "custom_records/list_record_types"})
 @async_response
 async def handle_list_record_types(
     hass: HomeAssistant,
@@ -98,9 +98,7 @@ async def handle_list_record_types(
     """Return all configured record types."""
     runtime_data = _get_runtime_data(hass)
     if runtime_data is None:
-        connection.send_error(
-            msg["id"], "not_setup", "Custom Metrics Recorder is not set up"
-        )
+        connection.send_error(msg["id"], "not_setup", "Custom Records is not set up")
         return
     connection.send_result(
         msg["id"],
@@ -110,7 +108,7 @@ async def handle_list_record_types(
 
 @websocket_command(
     {
-        vol.Required("type"): "custom_metrics/list_records",
+        vol.Required("type"): "custom_records/list_records",
         vol.Required(ATTR_RECORD_TYPE): str,
         vol.Optional("start"): str,
         vol.Optional("end"): str,
@@ -127,9 +125,7 @@ async def handle_list_records(
     """Return records for a record type, optionally filtered by time range."""
     runtime_data = _get_runtime_data(hass)
     if runtime_data is None:
-        connection.send_error(
-            msg["id"], "not_setup", "Custom Metrics Recorder is not set up"
-        )
+        connection.send_error(msg["id"], "not_setup", "Custom Records is not set up")
         return
     record_type_id = msg[ATTR_RECORD_TYPE]
     record_type = runtime_data.record_types.get(record_type_id)
@@ -437,7 +433,7 @@ def _shape_metrics_result(
 
 @websocket_command(
     {
-        vol.Required("type"): "custom_metrics/aggregate_records",
+        vol.Required("type"): "custom_records/aggregate_records",
         vol.Required(ATTR_RECORD_TYPE): str,
         vol.Optional(ATTR_OP): vol.Coerce(AggregateOp),
         vol.Optional(ATTR_BUCKET): str,
@@ -462,9 +458,7 @@ async def handle_aggregate_records(  # noqa: PLR0911, PLR0912, PLR0915 (many ind
     """Return structured aggregate data: buckets, groups, and/or multi-metric series."""
     runtime_data = _get_runtime_data(hass)
     if runtime_data is None:
-        connection.send_error(
-            msg["id"], "not_setup", "Custom Metrics Recorder is not set up"
-        )
+        connection.send_error(msg["id"], "not_setup", "Custom Records is not set up")
         return
     record_type_id = msg[ATTR_RECORD_TYPE]
     record_type = runtime_data.record_types.get(record_type_id)
@@ -587,7 +581,7 @@ async def handle_aggregate_records(  # noqa: PLR0911, PLR0912, PLR0915 (many ind
 
 @websocket_command(
     {
-        vol.Required("type"): "custom_metrics/get_field_stats",
+        vol.Required("type"): "custom_records/get_field_stats",
         vol.Required(ATTR_RECORD_TYPE): str,
         vol.Required(ATTR_FIELD): str,
         vol.Optional(ATTR_START): str,
@@ -605,9 +599,7 @@ async def handle_get_field_stats(  # noqa: PLR0911 (many independent early-exit 
     """Return first/last/min/max/sum/avg/count for a numeric field over a period."""
     runtime_data = _get_runtime_data(hass)
     if runtime_data is None:
-        connection.send_error(
-            msg["id"], "not_setup", "Custom Metrics Recorder is not set up"
-        )
+        connection.send_error(msg["id"], "not_setup", "Custom Records is not set up")
         return
     record_type_id = msg[ATTR_RECORD_TYPE]
     record_type = runtime_data.record_types.get(record_type_id)
@@ -658,7 +650,7 @@ async def handle_get_field_stats(  # noqa: PLR0911 (many independent early-exit 
 
 @websocket_command(
     {
-        vol.Required("type"): "custom_metrics/histogram_records",
+        vol.Required("type"): "custom_records/histogram_records",
         vol.Required(ATTR_RECORD_TYPE): str,
         vol.Required(ATTR_FIELD): str,
         vol.Optional(ATTR_START): str,
@@ -681,9 +673,7 @@ async def handle_histogram_records(  # noqa: PLR0911 (many independent early-exi
     """Return value-distribution bins for a numeric field."""
     runtime_data = _get_runtime_data(hass)
     if runtime_data is None:
-        connection.send_error(
-            msg["id"], "not_setup", "Custom Metrics Recorder is not set up"
-        )
+        connection.send_error(msg["id"], "not_setup", "Custom Records is not set up")
         return
     record_type_id = msg[ATTR_RECORD_TYPE]
     record_type = runtime_data.record_types.get(record_type_id)
@@ -772,7 +762,7 @@ _PERIOD_SCHEMA = {vol.Required("start"): str, vol.Required("end"): str}
 
 @websocket_command(
     {
-        vol.Required("type"): "custom_metrics/compare_periods",
+        vol.Required("type"): "custom_records/compare_periods",
         vol.Required(ATTR_RECORD_TYPE): str,
         vol.Required(ATTR_OP): vol.Coerce(AggregateOp),
         vol.Optional(ATTR_FIELD): str,
@@ -791,9 +781,7 @@ async def handle_compare_periods(  # noqa: PLR0911, PLR0912, PLR0915 (many indep
     """Return current vs. previous period aggregate values and their delta."""
     runtime_data = _get_runtime_data(hass)
     if runtime_data is None:
-        connection.send_error(
-            msg["id"], "not_setup", "Custom Metrics Recorder is not set up"
-        )
+        connection.send_error(msg["id"], "not_setup", "Custom Records is not set up")
         return
     record_type_id = msg[ATTR_RECORD_TYPE]
     record_type = runtime_data.record_types.get(record_type_id)
@@ -950,7 +938,7 @@ async def handle_compare_periods(  # noqa: PLR0911, PLR0912, PLR0915 (many indep
 
 @websocket_command(
     {
-        vol.Required("type"): "custom_metrics/add_record",
+        vol.Required("type"): "custom_records/add_record",
         vol.Required(ATTR_RECORD_TYPE): str,
         vol.Required(ATTR_FIELDS): dict,
         vol.Optional(ATTR_TIMESTAMP): str,
@@ -965,9 +953,7 @@ async def handle_add_record(
     """Add a record - a thin wrapper sharing the service's validation logic."""
     runtime_data = _get_runtime_data(hass)
     if runtime_data is None:
-        connection.send_error(
-            msg["id"], "not_setup", "Custom Metrics Recorder is not set up"
-        )
+        connection.send_error(msg["id"], "not_setup", "Custom Records is not set up")
         return
     record_type_id = msg[ATTR_RECORD_TYPE]
     record_type = runtime_data.record_types.get(record_type_id)
@@ -1003,7 +989,7 @@ async def handle_add_record(
 
 @websocket_command(
     {
-        vol.Required("type"): "custom_metrics/delete_record",
+        vol.Required("type"): "custom_records/delete_record",
         vol.Required(ATTR_RECORD_TYPE): str,
         vol.Required("record_id"): str,
     }
@@ -1017,9 +1003,7 @@ async def handle_delete_record(
     """Delete a record by id."""
     runtime_data = _get_runtime_data(hass)
     if runtime_data is None:
-        connection.send_error(
-            msg["id"], "not_setup", "Custom Metrics Recorder is not set up"
-        )
+        connection.send_error(msg["id"], "not_setup", "Custom Records is not set up")
         return
     record_type_id = msg[ATTR_RECORD_TYPE]
     if record_type_id not in runtime_data.record_types:
@@ -1041,7 +1025,7 @@ async def handle_delete_record(
 
 @websocket_command(
     {
-        vol.Required("type"): "custom_metrics/validate_image_path",
+        vol.Required("type"): "custom_records/validate_image_path",
         vol.Required("path"): str,
     }
 )
@@ -1057,7 +1041,7 @@ async def handle_validate_image_path(
 
 
 def async_setup_websocket_api(hass: HomeAssistant) -> None:
-    """Register the custom_metrics WebSocket commands once, hass-wide."""
+    """Register the custom_records WebSocket commands once, hass-wide."""
     if hass.data.get(_WS_REGISTERED_KEY):
         return
     websocket_api.async_register_command(hass, handle_list_record_types)

@@ -1,4 +1,4 @@
-"""Config and record-type subentry flows for Custom Metrics Recorder."""
+"""Config and record-type subentry flows for Custom Records."""
 
 from __future__ import annotations
 
@@ -130,9 +130,9 @@ def _field_selector(fields: list[FieldDefinition]) -> selector.SelectSelector:
     )
 
 
-class CustomMetricsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class CustomRecordsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """
-    Config flow for Custom Metrics Recorder.
+    Config flow for Custom Records.
 
     There is nothing to configure upfront - this integration has no external
     device/account to connect to, so the flow simply creates the single entry.
@@ -150,7 +150,7 @@ class CustomMetricsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.ConfigFlowResult:
         """Handle the initial (and only) step."""
         if user_input is not None:
-            return self.async_create_entry(title="Custom Metrics Recorder", data={})
+            return self.async_create_entry(title="Custom Records", data={})
         return self.async_show_form(step_id="user")
 
     @classmethod

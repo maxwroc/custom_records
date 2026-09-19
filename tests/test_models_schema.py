@@ -1,13 +1,13 @@
-"""Tests for custom_metrics.models and schema.py validation."""
+"""Tests for custom_records.models and schema.py validation."""
 
 from __future__ import annotations
 
 import pytest
 import voluptuous as vol
 
-from custom_components.custom_metrics.const import FieldType
-from custom_components.custom_metrics.models import FieldDefinition, RecordType
-from custom_components.custom_metrics.schema import validate_record_data
+from custom_components.custom_records.const import FieldType
+from custom_components.custom_records.models import FieldDefinition, RecordType
+from custom_components.custom_records.schema import validate_record_data
 
 
 def test_field_definition_round_trip() -> None:

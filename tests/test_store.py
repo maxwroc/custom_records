@@ -1,4 +1,4 @@
-"""Tests for custom_metrics.store.RecordStorage (SQLite-backed, plan_sql.md)."""
+"""Tests for custom_records.store.RecordStorage (SQLite-backed, plan_sql.md)."""
 
 from __future__ import annotations
 
@@ -10,16 +10,16 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from custom_components.custom_metrics.const import (
+from custom_components.custom_records.const import (
     ATTR_ENTRY_ID,
     ATTR_RECORD_TYPE,
     EVENT_RECORDS_UPDATED,
     FieldType,
 )
-from custom_components.custom_metrics.csv_transfer import ImportRow
-from custom_components.custom_metrics.models import FieldDefinition, RecordType
-from custom_components.custom_metrics.sql_encoding import CompiledFilter
-from custom_components.custom_metrics.store import (
+from custom_components.custom_records.csv_transfer import ImportRow
+from custom_components.custom_records.models import FieldDefinition, RecordType
+from custom_components.custom_records.sql_encoding import CompiledFilter
+from custom_components.custom_records.store import (
     RecordStorage,
     SchemaError,
     _transaction,
@@ -522,7 +522,7 @@ async def test_missing_configured_table_is_not_recreated(
     await storage.async_load({"bp": _bp_record_type()})
     await storage.async_close()
 
-    db_path = hass.config.path(".storage", "custom_metrics", "custom_metrics_entry1.db")
+    db_path = hass.config.path(".storage", "custom_records", "custom_records_entry1.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute('DROP TABLE "records_bp"')
 

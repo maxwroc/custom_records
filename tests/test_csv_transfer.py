@@ -1,15 +1,15 @@
-"""Tests for custom_metrics.csv_transfer (pure CSV build/parse logic)."""
+"""Tests for custom_records.csv_transfer (pure CSV build/parse logic)."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from custom_components.custom_metrics.const import FieldType
-from custom_components.custom_metrics.csv_transfer import (
+from custom_components.custom_records.const import FieldType
+from custom_components.custom_records.csv_transfer import (
     build_export_csv,
     parse_import_csv,
 )
-from custom_components.custom_metrics.models import FieldDefinition, RecordType
+from custom_components.custom_records.models import FieldDefinition, RecordType
 
 RECORD_TYPE = RecordType(
     id="bp",

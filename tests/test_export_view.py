@@ -1,4 +1,4 @@
-"""Tests for custom_metrics.export_view.CustomMetricsExportView (authenticated)."""
+"""Tests for custom_records.export_view.CustomRecordsExportView (authenticated)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from custom_components.custom_metrics.const import DOMAIN
+from custom_components.custom_records.const import DOMAIN
 
 from .conftest import BP_RECORD_TYPE, async_setup_entry_with_types
 

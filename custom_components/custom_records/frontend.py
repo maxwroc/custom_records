@@ -3,7 +3,7 @@ Serve and auto-register the bundled custom Lovelace card.
 
 Uses hass.http.async_register_static_paths to serve the built JS file and
 homeassistant.components.frontend.add_extra_js_url to inject it globally, so
-the card is available as `type: custom:custom-metrics-card` in any dashboard
+the card is available as `type: custom:custom-records-card` in any dashboard
 without the user ever needing to add a Lovelace "Resource" manually.
 
 Note: es5=True must NOT be used here. HA's index.html only evaluates the
@@ -26,8 +26,8 @@ from .const import DOMAIN
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-CARD_URL_PATH = f"/{DOMAIN}/custom-metrics-card.js"
-CARD_FILE_PATH = Path(__file__).parent / "www" / "custom-metrics-card.js"
+CARD_URL_PATH = f"/{DOMAIN}/custom-records-card.js"
+CARD_FILE_PATH = Path(__file__).parent / "www" / "custom-records-card.js"
 _FRONTEND_REGISTERED_KEY = f"{DOMAIN}_frontend_registered"
 
 

@@ -9,4 +9,4 @@ homeassistant:
 logger:
   default: info
   logs:
-    custom_components.custom_metrics: debug
+    custom_components.custom_records: debug

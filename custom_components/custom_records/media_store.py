@@ -2,7 +2,7 @@
 Image file storage for IMAGE-type record fields.
 
 Files are stored under
-<config>/.storage/custom_metrics/<entry_id>/media/<record_type_id>/, decoupled
+<config>/.storage/custom_records/<entry_id>/media/<record_type_id>/, decoupled
 from the record's own id (a random filename is generated per stored image) so
 an image can be stored before its owning record exists.
 
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
 # URL prefix under which each entry's media directory is served, via
-# CustomMetricsMediaView below - a real HomeAssistantView (requires_auth=True
+# CustomRecordsMediaView below - a real HomeAssistantView (requires_auth=True
 # by default), the same authenticated-view mechanism HA's own local media
 # source uses for config/media (see LocalMediaView). A request must carry
 # either a Bearer token or a valid signed-URL query param (the same signing
@@ -144,7 +144,7 @@ def validate_write_target_path(
     return target
 
 
-class CustomMetricsMediaView(HomeAssistantView):
+class CustomRecordsMediaView(HomeAssistantView):
     """Serve stored images - authenticated (Bearer token or signed URL)."""
 
     url = f"{MEDIA_URL_PREFIX}/{{entry_id}}/{{record_type_id}}/{{filename}}"
@@ -177,7 +177,7 @@ def async_register_media_view(hass: HomeAssistant) -> None:
     """Register the authenticated media-serving view, once, hass-wide."""
     if hass.data.get(_MEDIA_VIEW_REGISTERED_KEY):
         return
-    hass.http.register_view(CustomMetricsMediaView(hass))
+    hass.http.register_view(CustomRecordsMediaView(hass))
     hass.data[_MEDIA_VIEW_REGISTERED_KEY] = True
 
 
@@ -388,7 +388,7 @@ async def async_validate_image_path(
     """
     Return None if source_path is a valid, existing image file, else an error message.
 
-    Used by the custom_metrics/validate_image_path WebSocket command so the
+    Used by the custom_records/validate_image_path WebSocket command so the
     card can check a path before submitting an add_record call.
     """
 

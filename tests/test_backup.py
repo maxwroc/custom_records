@@ -8,8 +8,8 @@ from pathlib import Path
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.custom_metrics.backup import async_post_backup, async_pre_backup
-from custom_components.custom_metrics.const import DOMAIN
+from custom_components.custom_records.backup import async_post_backup, async_pre_backup
+from custom_components.custom_records.const import DOMAIN
 
 from .conftest import BP_RECORD_TYPE, async_setup_entry_with_types
 
@@ -35,7 +35,7 @@ async def test_backup_closes_database_and_blocks_writes(
     assert not blocked_write.done()
 
     db_path = Path(
-        hass.config.path(".storage", DOMAIN, f"custom_metrics_{entry.entry_id}.db")
+        hass.config.path(".storage", DOMAIN, f"custom_records_{entry.entry_id}.db")
     )
     assert await hass.async_add_executor_job(_backup_row_count, db_path) == 1
 

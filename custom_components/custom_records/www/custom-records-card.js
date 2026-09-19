@@ -1,12 +1,12 @@
 /**
- * Custom Metrics Recorder - Lovelace card.
+ * Custom Records - Lovelace card.
  *
  * A lightweight custom card (no build step, no external dependencies) that
  * lists and adds records for a single configured record type via the
- * custom_metrics WebSocket API.
+ * custom_records WebSocket API.
  *
  * Card config:
- *   type: custom:custom-metrics-card
+ *   type: custom:custom-records-card
  *   record_type: blood_pressure   # required - the record type id
  *   title: Blood Pressure         # optional - defaults to the record type's name
  *   last: 20                      # optional - a count (max rows, default 20) OR a duration like
@@ -23,7 +23,7 @@
  *     - field: systolic
  *       label: Systolic pressure  # optional - defaults to the field label
  *
- * A visual editor (CustomMetricsCardEditor, below) is also registered via
+ * A visual editor (CustomRecordsCardEditor, below) is also registered via
  * getConfigElement(), so all of the above can be configured through the
  * dashboard's "Visual editor" instead of raw YAML.
  */
@@ -43,7 +43,7 @@ const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
 // type's data or definition changes, from ANY source (this card, another
 // card/tab, an automation's service call, the purge job, etc.) - lets an
 // already-open card refetch instead of silently going stale.
-const EVENT_RECORDS_UPDATED = "custom_metrics_updated";
+const EVENT_RECORDS_UPDATED = "custom_records_updated";
 // Coalesces bursts of update events (e.g. many rows added in quick
 // succession) into a single refetch.
 const UPDATE_DEBOUNCE_MS = 300;
@@ -168,7 +168,7 @@ function formatDateTime(hass, date) {
     }
 }
 
-class CustomMetricsCard extends HTMLElement {
+class CustomRecordsCard extends HTMLElement {
     constructor() {
         super();
         this.attachShadow({ mode: "open" });
@@ -218,16 +218,16 @@ class CustomMetricsCard extends HTMLElement {
 
     setConfig(config) {
         if (!config || !config.record_type) {
-            throw new Error("custom-metrics-card: 'record_type' is required in the card config");
+            throw new Error("custom-records-card: 'record_type' is required in the card config");
         }
         if (config.last !== undefined && !parseLast(config.last)) {
             throw new Error(
-                "custom-metrics-card: 'last' must be a positive integer (e.g. 20) or a duration like '30m', '12h', '3d', '2w'",
+                "custom-records-card: 'last' must be a positive integer (e.g. 20) or a duration like '30m', '12h', '3d', '2w'",
             );
         }
         if (config.filter !== undefined && !Array.isArray(config.filter)) {
             throw new Error(
-                "custom-metrics-card: 'filter' must be a list of single-key field maps, e.g. [{name: Max}]",
+                "custom-records-card: 'filter' must be a list of single-key field maps, e.g. [{name: Max}]",
             );
         }
         if (
@@ -235,11 +235,11 @@ class CustomMetricsCard extends HTMLElement {
             (!Array.isArray(config.columns) || !config.columns.every((c) => typeof c === "string"))
         ) {
             throw new Error(
-                "custom-metrics-card: 'columns' must be a list of field key strings, e.g. [systolic, diastolic]",
+                "custom-records-card: 'columns' must be a list of field key strings, e.g. [systolic, diastolic]",
             );
         }
         if (config.image_header_field !== undefined && typeof config.image_header_field !== "string") {
-            throw new Error("custom-metrics-card: 'image_header_field' must be a field key string");
+            throw new Error("custom-records-card: 'image_header_field' must be a field key string");
         }
         if (
             config.image_overlay_fields !== undefined &&
@@ -248,7 +248,7 @@ class CustomMetricsCard extends HTMLElement {
                     (entry.label === undefined || typeof entry.label === "string"),
             ))
         ) {
-            throw new Error("custom-metrics-card: 'image_overlay_fields' must be a list of {field, label?} objects");
+            throw new Error("custom-records-card: 'image_overlay_fields' must be a list of {field, label?} objects");
         }
         this._configGeneration += 1;
         this._loadGeneration += 1;
@@ -373,7 +373,7 @@ class CustomMetricsCard extends HTMLElement {
         const hass = this._hass;
         try {
             const typesResponse = await hass.callWS({
-                type: "custom_metrics/list_record_types",
+                type: "custom_records/list_record_types",
             });
             if (configGeneration !== this._configGeneration) {
                 return;
@@ -433,7 +433,7 @@ class CustomMetricsCard extends HTMLElement {
         this._render();
         try {
             const typesResponse = await hass.callWS({
-                type: "custom_metrics/list_record_types",
+                type: "custom_records/list_record_types",
             });
             if (!isCurrent()) {
                 return;
@@ -447,7 +447,7 @@ class CustomMetricsCard extends HTMLElement {
 
             const last = parseLast(config.last);
             const recordsResponse = await hass.callWS({
-                type: "custom_metrics/list_records",
+                type: "custom_records/list_records",
                 record_type: config.record_type,
                 ...(last.type === "count"
                     ? { limit: last.value }
@@ -605,7 +605,7 @@ class CustomMetricsCard extends HTMLElement {
             }
             try {
                 const result = await hass.callWS({
-                    type: "custom_metrics/validate_image_path",
+                    type: "custom_records/validate_image_path",
                     path,
                 });
                 if (!isCurrent()) {
@@ -634,7 +634,7 @@ class CustomMetricsCard extends HTMLElement {
                 return;
             }
             await hass.callWS({
-                type: "custom_metrics/add_record",
+                type: "custom_records/add_record",
                 record_type: config.record_type,
                 fields,
             });
@@ -1030,7 +1030,7 @@ class CustomMetricsCard extends HTMLElement {
             onConfirm: async () => {
                 try {
                     await this._hass.callWS({
-                        type: "custom_metrics/delete_record",
+                        type: "custom_records/delete_record",
                         record_type: this._config.record_type,
                         record_id: recordId,
                     });
@@ -1489,11 +1489,11 @@ class CustomMetricsCard extends HTMLElement {
     }
 
     static getStubConfig() {
-        return { type: "custom:custom-metrics-card", record_type: "" };
+        return { type: "custom:custom-records-card", record_type: "" };
     }
 
     static getConfigElement() {
-        return document.createElement("custom-metrics-card-editor");
+        return document.createElement("custom-records-card-editor");
     }
 }
 
@@ -1507,7 +1507,7 @@ const EDITOR_FIELD_LABELS = {
 };
 
 /**
- * Visual editor for custom-metrics-card, using HA's built-in <ha-form>.
+ * Visual editor for custom-records-card, using HA's built-in <ha-form>.
  *
  * Exposes every card config option (record_type, title, last, show_add_record,
  * show_actions) as a form field, and reports changes back to the
@@ -1517,7 +1517,7 @@ const EDITOR_FIELD_LABELS = {
  * recreating it would steal input focus while the user is mid-edit (e.g.
  * typing in the `title` field).
  */
-class CustomMetricsCardEditor extends HTMLElement {
+class CustomRecordsCardEditor extends HTMLElement {
     constructor() {
         super();
         this._config = {};
@@ -1550,7 +1550,7 @@ class CustomMetricsCardEditor extends HTMLElement {
         this._recordTypesLoading = true;
         this._recordTypesError = null;
         try {
-            const response = await this._hass.callWS({ type: "custom_metrics/list_record_types" });
+            const response = await this._hass.callWS({ type: "custom_records/list_record_types" });
             this._recordTypes = response.record_types || [];
             this._recordTypesLoaded = true;
         } catch (err) {
@@ -1756,7 +1756,7 @@ class CustomMetricsCardEditor extends HTMLElement {
      * order, with up/down/remove controls) and an "Available fields" list
      * (with an add control) for the currently selected record type. Not a
      * plain text field and not backed by `<ha-form>` - built directly as
-     * hand-rolled HTML/listeners (same style as CustomMetricsCard itself)
+     * hand-rolled HTML/listeners (same style as CustomRecordsCard itself)
      * since `<ha-form>`'s reorderable multi-select support isn't guaranteed
      * across HA frontend versions, per P0-10's plan.
      */
@@ -1858,23 +1858,23 @@ class CustomMetricsCardEditor extends HTMLElement {
 // afterwards, even though this module ran fine). Deferring registration
 // until a core HA element (`home-assistant`, the app's root element) is
 // defined ensures the registry is already in its final state.
-function registerCustomMetricsCard() {
-    if (customElements.get("custom-metrics-card")) {
+function registerCustomRecordsCard() {
+    if (customElements.get("custom-records-card")) {
         return;
     }
-    customElements.define("custom-metrics-card", CustomMetricsCard);
-    customElements.define("custom-metrics-card-editor", CustomMetricsCardEditor);
+    customElements.define("custom-records-card", CustomRecordsCard);
+    customElements.define("custom-records-card-editor", CustomRecordsCardEditor);
 
     window.customCards = window.customCards || [];
     window.customCards.push({
-        type: "custom-metrics-card",
-        name: "Custom Metrics Recorder",
-        description: "List and add records for a Custom Metrics Recorder record type.",
+        type: "custom-records-card",
+        name: "Custom Records",
+        description: "List and add records for a Custom Records record type.",
     });
 }
 
 if (customElements.get("home-assistant")) {
-    registerCustomMetricsCard();
+    registerCustomRecordsCard();
 } else {
-    customElements.whenDefined("home-assistant").then(registerCustomMetricsCard);
+    customElements.whenDefined("home-assistant").then(registerCustomRecordsCard);
 }

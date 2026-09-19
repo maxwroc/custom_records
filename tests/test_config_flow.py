@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
 
-from custom_components.custom_metrics.const import DOMAIN, SUBENTRY_TYPE_RECORD_TYPE
+from custom_components.custom_records.const import DOMAIN, SUBENTRY_TYPE_RECORD_TYPE
 
 from .conftest import BP_RECORD_TYPE, async_setup_entry_with_types
 
@@ -62,7 +62,8 @@ async def test_user_flow_creates_single_entry(hass: HomeAssistant) -> None:
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "Custom Metrics Recorder"
+    assert result["title"] == "Custom Records"
+    assert result["result"].domain == "custom_records"
 
 
 async def test_add_record_type_and_field(hass: HomeAssistant) -> None:

@@ -4,7 +4,7 @@ Media source: browse/resolve images stored for IMAGE-type record fields.
 Exposes a simple two-level hierarchy: root -> record types that have an image
 field -> individual records with a stored image as leaf items.
 
-Images are served through CustomMetricsMediaView (media_store.py), a real
+Images are served through CustomRecordsMediaView (media_store.py), a real
 HomeAssistantView with requires_auth=True (the same authenticated-view
 mechanism HA's own local media source uses for config/media). The URL
 returned below is unsigned; callers should resolve media via the core
@@ -35,24 +35,24 @@ from .media_store import MEDIA_URL_PREFIX
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from .runtime_data import CustomMetricsRuntimeData
+    from .runtime_data import CustomRecordsRuntimeData
 
 
-async def async_get_media_source(hass: HomeAssistant) -> CustomMetricsMediaSource:
-    """Set up the custom_metrics media source."""
-    return CustomMetricsMediaSource(hass)
+async def async_get_media_source(hass: HomeAssistant) -> CustomRecordsMediaSource:
+    """Set up the custom_records media source."""
+    return CustomRecordsMediaSource(hass)
 
 
-def _get_runtime_data(hass: HomeAssistant) -> CustomMetricsRuntimeData | None:
+def _get_runtime_data(hass: HomeAssistant) -> CustomRecordsRuntimeData | None:
     entries = hass.config_entries.async_entries(DOMAIN)
     loaded = [entry for entry in entries if entry.state is ConfigEntryState.LOADED]
     return loaded[0].runtime_data if loaded else None
 
 
-class CustomMetricsMediaSource(MediaSource):
+class CustomRecordsMediaSource(MediaSource):
     """Expose stored record images through HA's media browser."""
 
-    name = "Custom Metrics Recorder"
+    name = "Custom Records"
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the media source."""
@@ -63,7 +63,7 @@ class CustomMetricsMediaSource(MediaSource):
         """Resolve a record's image field to a playable/servable URL."""
         runtime_data = _get_runtime_data(self.hass)
         if runtime_data is None:
-            msg = "Custom Metrics Recorder is not set up"
+            msg = "Custom Records is not set up"
             raise Unresolvable(msg)
 
         try:
@@ -102,14 +102,14 @@ class CustomMetricsMediaSource(MediaSource):
         """Browse record types with image fields, then records with images."""
         runtime_data = _get_runtime_data(self.hass)
         if runtime_data is None:
-            msg = "Custom Metrics Recorder is not set up"
+            msg = "Custom Records is not set up"
             raise Unresolvable(msg)
 
         if not item.identifier:
             return self._browse_root(runtime_data)
         return await self._browse_record_type(runtime_data, item.identifier)
 
-    def _browse_root(self, runtime_data: CustomMetricsRuntimeData) -> BrowseMediaSource:
+    def _browse_root(self, runtime_data: CustomRecordsRuntimeData) -> BrowseMediaSource:
         children = [
             BrowseMediaSource(
                 domain=DOMAIN,
@@ -128,14 +128,14 @@ class CustomMetricsMediaSource(MediaSource):
             identifier=None,
             media_class=MediaClass.DIRECTORY,
             media_content_type=MediaType.IMAGE,
-            title="Custom Metrics Recorder",
+            title="Custom Records",
             can_play=False,
             can_expand=True,
             children=children,
         )
 
     async def _browse_record_type(
-        self, runtime_data: CustomMetricsRuntimeData, record_type_id: str
+        self, runtime_data: CustomRecordsRuntimeData, record_type_id: str
     ) -> BrowseMediaSource:
         record_type = runtime_data.record_types.get(record_type_id)
         if record_type is None:

@@ -1,4 +1,4 @@
-"""Data models for custom_metrics record types and field definitions."""
+"""Data models for custom_records record types and field definitions."""
 
 from __future__ import annotations
 

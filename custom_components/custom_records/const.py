@@ -1,4 +1,4 @@
-"""Constants for custom_metrics."""
+"""Constants for custom_records."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from logging import Logger, getLogger
 
 LOGGER: Logger = getLogger(__package__)
 
-DOMAIN = "custom_metrics"
+DOMAIN = "custom_records"
 STORAGE_VERSION = 1
 STORAGE_KEY_TEMPLATE = f"{DOMAIN}_{{entry_id}}_{{record_type_id}}"
 
@@ -27,22 +27,22 @@ ATTR_TIMESTAMP = "timestamp"
 ATTR_RECORD_ID = "id"
 
 # Public shape of an IMAGE-type field value, e.g.
-# {"media_source": "media-source://custom_metrics/<type>/<id>/<field>"}.
+# {"media_source": "media-source://custom_records/<type>/<id>/<field>"}.
 # Generated at serialization time (record_view.py); never stored.
 ATTR_MEDIA_SOURCE = "media_source"
 
-# custom_metrics/list_records WebSocket command: optional page-size param, and
+# custom_records/list_records WebSocket command: optional page-size param, and
 # a hard server-side cap applied regardless of what a caller (e.g. the card)
 # requests, to keep response payload size bounded as a record type grows.
 ATTR_LIMIT = "limit"
 MAX_LIST_RECORDS_LIMIT = 500
 
-# custom_metrics/list_records WebSocket command: optional server-side row
+# custom_records/list_records WebSocket command: optional server-side row
 # filter (P0-9) - a list of single-key {field_key: value} maps, AND-combined.
 # See filter_query.py for the compiled SQL WHERE fragment this is turned into.
 ATTR_FILTER = "filter"
 
-# custom_metrics/aggregate_records WebSocket command field names.
+# custom_records/aggregate_records WebSocket command field names.
 ATTR_OP = "op"
 ATTR_BUCKET = "bucket"
 ATTR_FIELD = "field"
@@ -51,7 +51,7 @@ ATTR_START = "start"
 ATTR_END = "end"
 
 
-# CSV export/import (custom_metrics.export_records/import_records services and
+# CSV export/import (custom_records.export_records/import_records services and
 # the record_type subentry's "Export data"/"Import data" reconfigure steps).
 ATTR_INCLUDE_ID = "include_id"
 ATTR_PATH = "path"
@@ -215,7 +215,7 @@ SQL_TYPE_FOR_FIELD_TYPE: dict[FieldType, str] = {
 
 
 class AggregateOp(StrEnum):
-    """Supported `custom_metrics/aggregate_records` operations."""
+    """Supported `custom_records/aggregate_records` operations."""
 
     SUM = "sum"
     AVG = "avg"
@@ -235,7 +235,7 @@ NUMERIC_AGGREGATE_OPS = {
 
 
 class AggregateBucket(StrEnum):
-    """Supported `custom_metrics/aggregate_records` calendar bucket sizes."""
+    """Supported `custom_records/aggregate_records` calendar bucket sizes."""
 
     HOUR = "hour"
     DAY = "day"
@@ -244,13 +244,13 @@ class AggregateBucket(StrEnum):
 
 
 class AggregateFormat(StrEnum):
-    """Supported `custom_metrics/aggregate_records` response shapes."""
+    """Supported `custom_records/aggregate_records` response shapes."""
 
     TABLE = "table"
     APEXCHARTS = "apexcharts"
 
 
-# custom_metrics/aggregate_records WebSocket command: v2 extensions
+# custom_records/aggregate_records WebSocket command: v2 extensions
 # (group_by, multi-metric, cumulative - see plan_sql.md follow-up plan).
 ATTR_GROUP_BY = "group_by"
 ATTR_METRICS = "metrics"
@@ -275,11 +275,11 @@ AUTO_BUCKET_HOUR_MAX_DAYS = 2
 AUTO_BUCKET_DAY_MAX_DAYS = 90
 AUTO_BUCKET_WEEK_MAX_DAYS = 730
 
-# custom_metrics/get_field_stats WebSocket command.
+# custom_records/get_field_stats WebSocket command.
 ATTR_STATS = "stats"
 ALL_FIELD_STATS = ("first", "last", "min", "max", "sum", "avg", "count")
 
-# custom_metrics/histogram_records WebSocket command.
+# custom_records/histogram_records WebSocket command.
 ATTR_BIN_COUNT = "bin_count"
 ATTR_BIN_WIDTH = "bin_width"
 ATTR_MIN = "min"
@@ -287,6 +287,6 @@ ATTR_MAX = "max"
 DEFAULT_HISTOGRAM_BIN_COUNT = 10
 MAX_HISTOGRAM_BINS = 100
 
-# custom_metrics/compare_periods WebSocket command.
+# custom_records/compare_periods WebSocket command.
 ATTR_CURRENT = "current"
 ATTR_PREVIOUS = "previous"

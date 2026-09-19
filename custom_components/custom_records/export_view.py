@@ -1,7 +1,7 @@
 """
 CSV export download endpoint for a single record type.
 
-Mirrors media_store.py's CustomMetricsMediaView pattern: a real
+Mirrors media_store.py's CustomRecordsMediaView pattern: a real
 HomeAssistantView (requires_auth=True by default), reachable either with a
 Bearer token or a short-lived signed-URL query param (see config_flow.py's
 `export_data` step, which builds and signs the actual download link shown to
@@ -22,14 +22,14 @@ from .csv_transfer import build_export_csv
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from .runtime_data import CustomMetricsRuntimeData
+    from .runtime_data import CustomRecordsRuntimeData
 
-_EXPORT_VIEW_REGISTERED_KEY = "custom_metrics_export_view_registered"
+_EXPORT_VIEW_REGISTERED_KEY = "custom_records_export_view_registered"
 
 
 def _get_runtime_data(
     hass: HomeAssistant, entry_id: str
-) -> CustomMetricsRuntimeData | None:
+) -> CustomRecordsRuntimeData | None:
     """Return the runtime data for entry_id, if it's currently loaded."""
     entries = hass.config_entries.async_entries(DOMAIN)
     matches = [
@@ -40,11 +40,11 @@ def _get_runtime_data(
     return matches[0].runtime_data if matches else None
 
 
-class CustomMetricsExportView(HomeAssistantView):
+class CustomRecordsExportView(HomeAssistantView):
     """Serve a record type's records as a downloadable CSV file."""
 
     url = f"{EXPORT_URL_PREFIX}/{{entry_id}}/{{record_type_id}}"
-    name = "api:custom_metrics:export"
+    name = "api:custom_records:export"
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the view."""
@@ -78,5 +78,5 @@ def async_register_export_view(hass: HomeAssistant) -> None:
     """Register the authenticated export-download view, once, hass-wide."""
     if hass.data.get(_EXPORT_VIEW_REGISTERED_KEY):
         return
-    hass.http.register_view(CustomMetricsExportView(hass))
+    hass.http.register_view(CustomRecordsExportView(hass))
     hass.data[_EXPORT_VIEW_REGISTERED_KEY] = True

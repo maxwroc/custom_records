@@ -1,4 +1,4 @@
-"""Tests for the custom_metrics WebSocket API commands."""
+"""Tests for the custom_records WebSocket API commands."""
 
 # pyright: reportOptionalMemberAccess=false
 
@@ -7,22 +7,52 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+import pytest
 from aiohttp import FormData
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
-from custom_components.custom_metrics.const import MAX_LIST_RECORDS_LIMIT
+from custom_components.custom_records.const import MAX_LIST_RECORDS_LIMIT
 
 from .conftest import BP_RECORD_TYPE, async_setup_entry_with_types, make_source_image
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from aiohttp.test_utils import TestClient
     from pytest_homeassistant_custom_component.typing import (
         ClientSessionGenerator,
         WebSocketGenerator,
     )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "list_record_types",
+        "list_records",
+        "aggregate_records",
+        "get_field_stats",
+        "histogram_records",
+        "compare_periods",
+        "add_record",
+        "delete_record",
+        "validate_image_path",
+    ],
+)
+async def test_legacy_namespace_is_not_registered(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, command: str
+) -> None:
+    """Fresh installations do not register compatibility aliases."""
+    await async_setup_entry_with_types(hass, [BP_RECORD_TYPE])
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": f"custom_metrics/{command}"})
+    response = await client.receive_json()
+
+    assert response["success"] is False
+    assert response["error"]["code"] == "unknown_command"
 
 
 async def test_list_record_types(
@@ -32,7 +62,7 @@ async def test_list_record_types(
     await async_setup_entry_with_types(hass, [BP_RECORD_TYPE])
     client = await hass_ws_client(hass)
 
-    await client.send_json({"id": 1, "type": "custom_metrics/list_record_types"})
+    await client.send_json({"id": 1, "type": "custom_records/list_record_types"})
     response = await client.receive_json()
 
     assert response["success"]
@@ -49,7 +79,7 @@ async def test_add_list_delete_record(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/add_record",
+            "type": "custom_records/add_record",
             "record_type": "bp",
             "fields": {"systolic": 120},
         }
@@ -59,7 +89,7 @@ async def test_add_list_delete_record(
     record_id = response["result"]["record"]["id"]
 
     await client.send_json(
-        {"id": 2, "type": "custom_metrics/list_records", "record_type": "bp"}
+        {"id": 2, "type": "custom_records/list_records", "record_type": "bp"}
     )
     response = await client.receive_json()
     assert len(response["result"]["records"]) == 1
@@ -67,7 +97,7 @@ async def test_add_list_delete_record(
     await client.send_json(
         {
             "id": 3,
-            "type": "custom_metrics/delete_record",
+            "type": "custom_records/delete_record",
             "record_type": "bp",
             "record_id": record_id,
         }
@@ -86,7 +116,7 @@ async def test_add_record_rejects_invalid_timestamp(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/add_record",
+            "type": "custom_records/add_record",
             "record_type": "bp",
             "fields": {"systolic": 120},
             "timestamp": "not-a-date",
@@ -106,7 +136,7 @@ async def test_unknown_record_type_error(
     client = await hass_ws_client(hass)
 
     await client.send_json(
-        {"id": 1, "type": "custom_metrics/list_records", "record_type": "nope"}
+        {"id": 1, "type": "custom_records/list_records", "record_type": "nope"}
     )
     response = await client.receive_json()
 
@@ -124,7 +154,7 @@ async def test_delete_missing_record_returns_not_found(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/delete_record",
+            "type": "custom_records/delete_record",
             "record_type": "bp",
             "record_id": "missing",
         }
@@ -146,7 +176,7 @@ async def test_validate_image_path_for_existing_file(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/validate_image_path",
+            "type": "custom_records/validate_image_path",
             "path": str(source_file),
         }
     )
@@ -166,7 +196,7 @@ async def test_validate_image_path_for_missing_file(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/validate_image_path",
+            "type": "custom_records/validate_image_path",
             "path": str(tmp_path / "missing.jpg"),
         }
     )
@@ -206,7 +236,7 @@ async def test_add_record_invalid_image_path_returns_error(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/add_record",
+            "type": "custom_records/add_record",
             "record_type": "pets",
             "fields": {"photo": str(tmp_path / "missing.jpg")},
         }
@@ -247,7 +277,7 @@ async def test_add_record_and_list_records_expose_media_source(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/add_record",
+            "type": "custom_records/add_record",
             "record_type": "pets",
             "fields": {"photo": str(source_file)},
         }
@@ -255,13 +285,13 @@ async def test_add_record_and_list_records_expose_media_source(
     response = await client.receive_json()
     assert response["success"]
     record_id = response["result"]["record"]["id"]
-    expected_media_source = f"media-source://custom_metrics/pets/{record_id}/photo"
+    expected_media_source = f"media-source://custom_records/pets/{record_id}/photo"
     assert response["result"]["record"]["photo"] == {
         "media_source": expected_media_source
     }
 
     await client.send_json(
-        {"id": 2, "type": "custom_metrics/list_records", "record_type": "pets"}
+        {"id": 2, "type": "custom_records/list_records", "record_type": "pets"}
     )
     response = await client.receive_json()
     assert response["success"]
@@ -270,9 +300,7 @@ async def test_add_record_and_list_records_expose_media_source(
     assert records[0]["photo"] == {"media_source": expected_media_source}
 
 
-async def _upload_file(
-    client: ClientSessionGenerator, content: bytes, filename: str
-) -> str:
+async def _upload_file(client: TestClient, content: bytes, filename: str) -> str:
     """Upload a file via the standard /api/file_upload endpoint; return its file_id."""
     form = FormData()
     form.add_field("file", content, filename=filename, content_type="image/jpeg")
@@ -316,7 +344,7 @@ async def test_add_record_with_uploaded_file_id(
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/add_record",
+            "type": "custom_records/add_record",
             "record_type": "pets",
             "fields": {"photo": {"file_id": file_id}},
         }
@@ -326,7 +354,7 @@ async def test_add_record_with_uploaded_file_id(
     assert response["success"]
     record_id = response["result"]["record"]["id"]
     assert response["result"]["record"]["photo"] == {
-        "media_source": f"media-source://custom_metrics/pets/{record_id}/photo"
+        "media_source": f"media-source://custom_records/pets/{record_id}/photo"
     }
 
 
@@ -361,7 +389,7 @@ async def test_add_record_unknown_file_id_returns_invalid_image(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/add_record",
+            "type": "custom_records/add_record",
             "record_type": "pets",
             "fields": {"photo": {"file_id": "unknown-file-id"}},
         }
@@ -388,7 +416,7 @@ async def test_list_records_limit_sorts_newest_first(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/list_records",
+            "type": "custom_records/list_records",
             "record_type": "bp",
             "limit": 2,
         }
@@ -410,7 +438,7 @@ async def test_list_records_rejects_invalid_datetime(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/list_records",
+            "type": "custom_records/list_records",
             "record_type": "bp",
             "start": "not-a-date",
         }
@@ -431,7 +459,7 @@ async def test_list_records_rejects_reversed_time_range(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/list_records",
+            "type": "custom_records/list_records",
             "record_type": "bp",
             "start": "2026-02-01T00:00:00+00:00",
             "end": "2026-01-01T00:00:00+00:00",
@@ -454,7 +482,7 @@ async def test_list_records_without_limit_is_still_capped(
 
     client = await hass_ws_client(hass)
     await client.send_json(
-        {"id": 1, "type": "custom_metrics/list_records", "record_type": "bp"}
+        {"id": 1, "type": "custom_records/list_records", "record_type": "bp"}
     )
     response = await client.receive_json()
 
@@ -475,7 +503,7 @@ async def test_list_records_limit_above_cap_is_clamped(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/list_records",
+            "type": "custom_records/list_records",
             "record_type": "bp",
             "limit": MAX_LIST_RECORDS_LIMIT * 10,
         }
@@ -540,7 +568,7 @@ async def test_list_records_filter_happy_path(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/list_records",
+            "type": "custom_records/list_records",
             "record_type": "widgets",
             "filter": [{"count": "> 75"}],
         }
@@ -561,7 +589,7 @@ async def test_list_records_filter_unknown_field_error(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/list_records",
+            "type": "custom_records/list_records",
             "record_type": "widgets",
             "filter": [{"nope": 1}],
         }
@@ -582,7 +610,7 @@ async def test_list_records_filter_image_field_error(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/list_records",
+            "type": "custom_records/list_records",
             "record_type": "widgets",
             "filter": [{"photo": "x"}],
         }
@@ -603,7 +631,7 @@ async def test_list_records_filter_unsupported_operator_error(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/list_records",
+            "type": "custom_records/list_records",
             "record_type": "widgets",
             "filter": [{"label": "> a"}],
         }
@@ -624,7 +652,7 @@ async def test_list_records_filter_invalid_value_error(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/list_records",
+            "type": "custom_records/list_records",
             "record_type": "widgets",
             "filter": [{"count": "> notanumber"}],
         }
@@ -645,7 +673,7 @@ async def test_list_records_filter_invalid_item_error(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/list_records",
+            "type": "custom_records/list_records",
             "record_type": "widgets",
             "filter": [{"count": 1, "label": "a"}],
         }
@@ -675,7 +703,7 @@ async def test_aggregate_records_sum_by_day(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "widgets",
             "op": "sum",
             "bucket": "day",
@@ -702,7 +730,7 @@ async def test_aggregate_records_count_forbids_field(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "widgets",
             "op": "count",
             "bucket": "day",
@@ -725,7 +753,7 @@ async def test_aggregate_records_numeric_op_requires_field(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "widgets",
             "op": "sum",
             "bucket": "day",
@@ -751,7 +779,7 @@ async def test_aggregate_records_count_op(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "widgets",
             "op": "count",
             "bucket": "day",
@@ -782,7 +810,7 @@ async def test_aggregate_records_with_filter(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "widgets",
             "op": "sum",
             "bucket": "day",
@@ -811,7 +839,7 @@ async def test_aggregate_records_apexcharts_format(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "widgets",
             "op": "sum",
             "bucket": "day",
@@ -837,7 +865,7 @@ async def test_aggregate_records_unknown_field_error(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "widgets",
             "op": "sum",
             "bucket": "day",
@@ -908,7 +936,7 @@ async def test_aggregate_records_hour_bucket(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "sum",
             "bucket": "hour",
@@ -941,7 +969,7 @@ async def test_aggregate_records_custom_minute_bucket(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "sum",
             "bucket": "15m",
@@ -965,7 +993,7 @@ async def test_aggregate_records_auto_bucket_requires_start_end(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "count",
             "bucket": "auto",
@@ -990,7 +1018,7 @@ async def test_aggregate_records_auto_bucket_picks_day_for_medium_range(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "count",
             "bucket": "auto",
@@ -1014,7 +1042,7 @@ async def test_aggregate_records_invalid_bucket_string(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "count",
             "bucket": "fortnight",
@@ -1040,7 +1068,7 @@ async def test_aggregate_records_group_by_single_select(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1070,7 +1098,7 @@ async def test_aggregate_records_group_by_multi_select_explodes(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1102,7 +1130,7 @@ async def test_aggregate_records_group_by_with_bucket_apexcharts(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1132,7 +1160,7 @@ async def test_aggregate_records_group_by_only_apexcharts_categorical(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1161,7 +1189,7 @@ async def test_aggregate_records_no_bucket_no_group_single_value(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1183,7 +1211,7 @@ async def test_aggregate_records_format_apexcharts_requires_bucket_or_group(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1210,7 +1238,7 @@ async def test_aggregate_records_metrics_multi_series(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "bucket": "day",
             "metrics": [
@@ -1237,7 +1265,7 @@ async def test_aggregate_records_legacy_metrics_conflict(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1261,7 +1289,7 @@ async def test_aggregate_records_op_or_metrics_required(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "bucket": "day",
         }
@@ -1282,7 +1310,7 @@ async def test_aggregate_records_group_by_metrics_conflict(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "bucket": "day",
             "group_by": "category",
@@ -1305,7 +1333,7 @@ async def test_aggregate_records_too_many_metrics(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "bucket": "day",
             "metrics": [{"op": "count"} for _ in range(11)],
@@ -1327,7 +1355,7 @@ async def test_aggregate_records_duplicate_metric_name(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "bucket": "day",
             "metrics": [{"op": "count"}, {"op": "count"}],
@@ -1349,7 +1377,7 @@ async def test_aggregate_records_invalid_metric_name(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "bucket": "day",
             "metrics": [{"op": "count", "name": []}],
@@ -1371,7 +1399,7 @@ async def test_aggregate_records_unknown_group_by_field(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "count",
             "bucket": "day",
@@ -1401,7 +1429,7 @@ async def test_aggregate_records_cumulative_sum(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1432,7 +1460,7 @@ async def test_aggregate_records_cumulative_avg_is_sample_weighted(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "avg",
             "field": "amount",
@@ -1459,7 +1487,7 @@ async def test_aggregate_records_cumulative_requires_bucket(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/aggregate_records",
+            "type": "custom_records/aggregate_records",
             "record_type": "expenses",
             "op": "count",
             "cumulative": True,
@@ -1489,7 +1517,7 @@ async def test_get_field_stats_default_all_stats(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/get_field_stats",
+            "type": "custom_records/get_field_stats",
             "record_type": "expenses",
             "field": "amount",
         }
@@ -1522,7 +1550,7 @@ async def test_get_field_stats_subset(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/get_field_stats",
+            "type": "custom_records/get_field_stats",
             "record_type": "expenses",
             "field": "amount",
             "stats": ["min", "max"],
@@ -1549,7 +1577,7 @@ async def test_get_field_stats_first_last_null_field(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/get_field_stats",
+            "type": "custom_records/get_field_stats",
             "record_type": "expenses",
             "field": "amount",
             "stats": ["first", "last"],
@@ -1571,7 +1599,7 @@ async def test_get_field_stats_unsupported_field(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/get_field_stats",
+            "type": "custom_records/get_field_stats",
             "record_type": "expenses",
             "field": "category",
         }
@@ -1598,7 +1626,7 @@ async def test_histogram_records_default_bin_count(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/histogram_records",
+            "type": "custom_records/histogram_records",
             "record_type": "expenses",
             "field": "amount",
         }
@@ -1629,7 +1657,7 @@ async def test_histogram_records_bin_width(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/histogram_records",
+            "type": "custom_records/histogram_records",
             "record_type": "expenses",
             "field": "amount",
             "bin_width": 10,
@@ -1657,7 +1685,7 @@ async def test_histogram_records_min_max_override(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/histogram_records",
+            "type": "custom_records/histogram_records",
             "record_type": "expenses",
             "field": "amount",
             "bin_count": 2,
@@ -1685,7 +1713,7 @@ async def test_histogram_records_invalid_override_range(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/histogram_records",
+            "type": "custom_records/histogram_records",
             "record_type": "expenses",
             "field": "amount",
             "min": 10,
@@ -1708,7 +1736,7 @@ async def test_histogram_records_bin_count_width_conflict(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/histogram_records",
+            "type": "custom_records/histogram_records",
             "record_type": "expenses",
             "field": "amount",
             "bin_count": 5,
@@ -1734,7 +1762,7 @@ async def test_histogram_records_too_many_bins(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/histogram_records",
+            "type": "custom_records/histogram_records",
             "record_type": "expenses",
             "field": "amount",
             "bin_width": 1,
@@ -1764,7 +1792,7 @@ async def test_compare_periods_basic_delta(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/compare_periods",
+            "type": "custom_records/compare_periods",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1814,7 +1842,7 @@ async def test_compare_periods_auto_derives_previous(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/compare_periods",
+            "type": "custom_records/compare_periods",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1853,7 +1881,7 @@ async def test_compare_periods_with_group_by(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/compare_periods",
+            "type": "custom_records/compare_periods",
             "record_type": "expenses",
             "op": "sum",
             "field": "amount",
@@ -1898,7 +1926,7 @@ async def test_compare_periods_group_by_image(
     await client.send_json(
         {
             "id": 1,
-            "type": "custom_metrics/compare_periods",
+            "type": "custom_records/compare_periods",
             "record_type": "widgets",
             "op": "sum",
             "field": "count",

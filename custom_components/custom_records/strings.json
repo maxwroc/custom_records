@@ -2,12 +2,12 @@
     "config": {
         "step": {
             "user": {
-                "description": "Set up Custom Metrics Recorder. You can add your record types (e.g. Blood Pressure, Fuel Cost) afterwards from this integration's card, using the \"Add record type\" button.",
-                "title": "Custom Metrics Recorder"
+                "description": "Set up Custom Records. You can add your record types (e.g. Blood Pressure, Fuel Cost) afterwards from this integration's card, using the \"Add record type\" button.",
+                "title": "Custom Records"
             }
         },
         "abort": {
-            "already_configured": "Custom Metrics Recorder is already configured (only one instance is supported)."
+            "already_configured": "Custom Records is already configured (only one instance is supported)."
         }
     },
     "config_subentries": {
@@ -140,8 +140,8 @@
             "description": "The record type \"{name}\" has {count} stored records. Consider configuring a retention period or a maximum record count for this record type from its card on the integration's page."
         },
         "database_schema_error": {
-            "title": "Custom Metrics database needs attention",
-            "description": "Custom Metrics stopped loading to protect stored data because its database structure is missing or does not match the configured record types: {error}. Restore a known-good backup or inspect the Home Assistant logs before making further changes."
+            "title": "Custom Records database needs attention",
+            "description": "Custom Records stopped loading to protect stored data because its database structure is missing or does not match the configured record types: {error}. Restore a known-good backup or inspect the Home Assistant logs before making further changes."
         }
     }
 }

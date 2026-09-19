@@ -1,4 +1,4 @@
-"""Runtime data attached to the custom_metrics config entry."""
+"""Runtime data attached to the custom_records config entry."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ if TYPE_CHECKING:
     from .models import RecordType
     from .store import RecordStorage
 
-type CustomMetricsConfigEntry = ConfigEntry[CustomMetricsRuntimeData]
+type CustomRecordsConfigEntry = ConfigEntry[CustomRecordsRuntimeData]
 
 
 @dataclass
-class CustomMetricsRuntimeData:
+class CustomRecordsRuntimeData:
     """Runtime (non-persisted) data for a config entry."""
 
     storage: RecordStorage

@@ -1,4 +1,4 @@
-"""Tests for custom_metrics.media_store.CustomMetricsMediaView (authenticated)."""
+"""Tests for custom_records.media_store.CustomRecordsMediaView (authenticated)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from uuid import uuid4
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from custom_components.custom_metrics.const import DOMAIN
-from custom_components.custom_metrics.media_store import MediaStore
+from custom_components.custom_records.const import DOMAIN
+from custom_components.custom_records.media_store import MediaStore
 
 from .conftest import make_source_image
 

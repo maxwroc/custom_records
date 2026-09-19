@@ -1,4 +1,4 @@
-"""Tests for custom_metrics.media_store."""
+"""Tests for custom_records.media_store."""
 
 from __future__ import annotations
 
@@ -12,23 +12,24 @@ from aiohttp import FormData
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from custom_components.custom_metrics.const import (
+from custom_components.custom_records.const import (
     DOMAIN,
     ENVELOPE_DATA,
     ENVELOPE_ID,
     FieldType,
 )
-from custom_components.custom_metrics.media_store import (
+from custom_components.custom_records.media_store import (
     MediaStore,
     async_resolve_image_fields,
     async_validate_image_path,
 )
-from custom_components.custom_metrics.models import FieldDefinition, RecordType
-from custom_components.custom_metrics.store import RecordStorage
+from custom_components.custom_records.models import FieldDefinition, RecordType
+from custom_components.custom_records.store import RecordStorage
 
 from .conftest import make_source_image
 
 if TYPE_CHECKING:
+    from aiohttp.test_utils import TestClient
     from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
 
 
@@ -285,7 +286,7 @@ async def test_validate_image_path_outside_allowed_root(
 
 
 async def _upload_file(
-    client: ClientSessionGenerator,
+    client: TestClient,
     content: bytes,
     filename: str,
 ) -> str:

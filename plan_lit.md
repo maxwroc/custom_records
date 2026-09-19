@@ -2,14 +2,14 @@
 
 ## Decisions locked in (via user Q&A)
 - Scope: infra only - no new cards designed yet. Ship with just the existing
-  `custom-metrics-card` registered in a new generic multi-card registry,
+  `custom-records-card` registered in a new generic multi-card registry,
   ready for more cards later.
 - Tooling: TypeScript + Lit decorators (`@property`/`@state`/`@customElement`),
   bundled with esbuild.
 - JS lint/tests: deferred to a later pass - NOT part of this migration.
 - Options Flow: confirmed OK to add (reverses config_flow.py's current
   documented "no separate Configure dialog needed" decision).
-- Build output (`custom_components/custom_metrics/www/*.js`) is **not**
+- Build output (`custom_components/custom_records/www/*.js`) is **not**
   committed to git - built locally for dev, and published as a GitHub
   Release asset via `zip_release` (see "Build/bundling & release strategy"
   below).
@@ -40,7 +40,7 @@ release) and how HACS actually fetches this integration's code.
      Verification), since `tsc` alone won't catch it.
    - `frontend/src/` - TypeScript sources (see Phase 2 for the actual files).
    - Build script (`package.json` `scripts.build`): esbuild bundling the
-     entry point to `../custom_components/custom_metrics/www/*.js`, flags:
+     entry point to `../custom_components/custom_records/www/*.js`, flags:
      `--bundle --format=esm --minify` (no `--packages=external` - `lit` MUST
      be fully inlined since HACS ships the raw repo file with no build step
      on the user's side; verify the built output has zero remaining bare
@@ -48,7 +48,7 @@ release) and how HACS actually fetches this integration's code.
      `scripts.typecheck`: `tsc --noEmit` (type-check only, esbuild does the
      actual transpile/bundle).
 2. `.gitignore`: add `frontend/node_modules/` **and**
-   `custom_components/custom_metrics/www/*.js` (the build output itself -
+   `custom_components/custom_records/www/*.js` (the build output itself -
    see "Build/bundling & release strategy" for why this is not committed).
 3. `scripts/setup`: add `(cd frontend && npm ci && npm run build)` so a
    fresh clone has a working local build immediately.
@@ -65,7 +65,7 @@ release) and how HACS actually fetches this integration's code.
    types package pinned to one HA release.
 
 **Verification**: `npm run build` produces a behaviorally-equivalent
-`custom-metrics-card.js` that still passes existing `tests/test_frontend.py`;
+`custom-records-card.js` that still passes existing `tests/test_frontend.py`;
 grep the built file for `"lit"`/`from "lit"` to confirm no unresolved bare
 imports remain.
 
@@ -76,12 +76,12 @@ imports remain.
 1. `frontend/src/format.ts` - port `useAmPm`/`formatDateNumeric`/
    `formatTimeWithSeconds`/`formatDateTime` verbatim (incl. the `bg`+`YMD`
    special case) from the current hand-rolled versions in
-   custom_components/custom_metrics/www/custom-metrics-card.js.
+   custom_components/custom_records/www/custom-records-card.js.
 2. `frontend/src/types.ts` - minimal local interfaces for `HomeAssistant`
    (just `.locale`, `.callWS`, `.connection.subscribeEvents`, `.config`),
    the card config shape, and the record/record-type shapes already
    implicit in the current file.
-3. `frontend/src/custom-metrics-card.ts` - `CustomMetricsCard` as
+3. `frontend/src/custom-records-card.ts` - `CustomRecordsCard` as
    `class extends LitElement`:
    - `@property({attribute: false}) hass!: HomeAssistant` - **no custom
      setter** (matches current real HA source precedent confirmed in
@@ -120,7 +120,7 @@ imports remain.
    "real Lit" goal but is the single biggest chunk of net-new code in this
    phase - flag if you'd rather keep the dialogs as-is (plain vanilla DOM
    builders, unchanged) for a smaller first pass.
-5. `frontend/src/custom-metrics-card-editor.ts` - `CustomMetricsCardEditor`
+5. `frontend/src/custom-records-card-editor.ts` - `CustomRecordsCardEditor`
    as a LitElement: `<ha-form .hass=${...} .schema=${...} .data=${...}>`
    declarative bindings replace the current imperative `form.hass = ...`/
    `form.schema = ...` reuse-the-same-DOM-node workaround (Lit's diffing
@@ -132,7 +132,7 @@ imports remain.
    `customElements.whenDefined("home-assistant")` bootstrap-race guard from
    today (this is orthogonal to Lit vs. vanilla - still needed), imports
    the above, calls `customElements.define(...)` + `window.customCards.push(...)`.
-7. Builds to the SAME `custom_components/custom_metrics/www/custom-metrics-card.js`
+7. Builds to the SAME `custom_components/custom_records/www/custom-records-card.js`
    path/filename - `frontend.py`'s `CARD_URL_PATH`/`_card_version_hash()`
    need no changes in this phase (Phase 3 parameterizes them for multiple
    files).
@@ -140,7 +140,7 @@ imports remain.
 **Verification**:
 - Manual smoke test in a real/dev HA instance (`scripts/develop`): table
   renders, add-record dialog opens/submits, delete-with-confirmation works,
-  a second browser tab's live update (WS `custom_metrics_updated` event)
+  a second browser tab's live update (WS `custom_records_updated` event)
   still triggers a re-render, the visual editor's columns picker still
   reorders/adds/removes correctly.
 - Specifically exercise the `useDefineForClassFields` gotcha: change a
@@ -154,7 +154,7 @@ imports remain.
 ## Phase 3 - Multi-card registry + Options Flow + conditional injection (*depends on 1, independent of 2*)
 
 1. `const.py` - add a small `CARD_REGISTRY` (id/filename/display name) with
-   exactly one entry today (`custom-metrics-card`), and
+   exactly one entry today (`custom-records-card`), and
    `CONF_ENABLED_CARDS = "enabled_cards"` for the options key.
 2. `frontend.py` - split into two functions:
    - `async_register_static_paths(hass)` - hass-wide, register-once-ever
@@ -192,7 +192,7 @@ imports remain.
    `async_setup_entry` with the fresh options, so the sync function just
    needs to be correct per-call, no diffing against "previous state" needed.
 4. `config_flow.py` - add `async_get_options_flow` classmethod to
-   `CustomMetricsConfigFlow` + new `CustomMetricsOptionsFlow(config_entries.OptionsFlow)`:
+   `CustomRecordsConfigFlow` + new `CustomRecordsOptionsFlow(config_entries.OptionsFlow)`:
    one step (`async_step_init`) with a
    `selector.SelectSelector(selector.SelectSelectorConfig(multiple=True, options=[... from CARD_REGISTRY ...]))`,
    pre-filled with the entry's current enabled set (default-all, same as
@@ -205,7 +205,7 @@ imports remain.
    `config`/`config_subentries` sections' structure and translation-key
    conventions already used for `edit_select_options` etc.
 6. `README.md` - add a compact, user-facing note: Settings -> Devices &
-   Services -> Custom Metrics Recorder -> **Configure** now lets you choose
+   Services -> Custom Records -> **Configure** now lets you choose
    which built-in cards are registered with the frontend.
 
 **Verification**:
@@ -246,21 +246,21 @@ directly rather than guess:
   `async_download_zip_file()`, which downloads ONE SPECIFIC GitHub Release
   **asset** (matched by exact filename) via `github_release_asset(...)`,
   then does `zip_file.extractall(self.content.path.local)` where
-  `content.path.local` is already `.../custom_components/custom_metrics`
+  `content.path.local` is already `.../custom_components/custom_records`
   - **no path-stripping** (unlike the plain-archive fallback path, which
   does strip a wrapping folder). So the release zip's internal paths must
-  be exactly `__init__.py`, `manifest.json`, `www/custom-metrics-card.js`,
+  be exactly `__init__.py`, `manifest.json`, `www/custom-records-card.js`,
   etc. AT THE ZIP ROOT - build it via
-  `cd custom_components/custom_metrics && zip -r ../../custom_metrics.zip .`
+  `cd custom_components/custom_records && zip -r ../../custom_records.zip .`
   (not zipping the parent dir, which would nest everything one level too
   deep).
 - **This is exactly the mechanism to avoid committing the build**: source
   (`frontend/src/*.ts`) stays in git; the compiled
-  `custom_components/custom_metrics/www/*.js` is `.gitignore`d entirely,
+  `custom_components/custom_records/www/*.js` is `.gitignore`d entirely,
   never committed to any branch. A NEW GitHub Actions workflow
   (`.github/workflows/release.yml`, `on: release: {types: [published]}`)
   builds the frontend (`npm ci && npm run build` inside `frontend/`) against
-  the just-tagged commit, zips `custom_components/custom_metrics/` (built
+  the just-tagged commit, zips `custom_components/custom_records/` (built
   JS now included) at zip-root, and uploads it as a release asset via
   e.g. `softprops/action-gh-release`, with the asset filename matching
   hacs.json's `filename` exactly.
@@ -277,26 +277,26 @@ directly rather than guess:
 
 ### 1. Local dev/testing
 `scripts/develop` runs `hass` directly against the working-tree
-`custom_components/custom_metrics`, NOT a HACS install - entirely
+`custom_components/custom_records`, NOT a HACS install - entirely
 independent of the release/zip mechanism below. Since the built JS is
 gitignored, `scripts/setup` runs the frontend build once
 (`cd frontend && npm ci && npm run build`) so a fresh on-disk
-`www/custom-metrics-card.js` exists locally before `scripts/develop` starts
+`www/custom-records-card.js` exists locally before `scripts/develop` starts
 HA. Re-run the build (or add a `--watch` dev script) after editing TS
 source, before reloading the card in the browser.
 
 ### 2. Release process
-- `custom_components/custom_metrics/www/*.js` -> `.gitignore`d entirely,
+- `custom_components/custom_records/www/*.js` -> `.gitignore`d entirely,
   never committed on any branch.
-- `hacs.json` gets `"zip_release": true, "filename": "custom_metrics.zip"`.
+- `hacs.json` gets `"zip_release": true, "filename": "custom_records.zip"`.
 - New `.github/workflows/release.yml`, triggered on
   `release: {types: [published]}`:
   1. Checkout (defaults to the tagged commit).
   2. `cd frontend && npm ci && npm run build`.
-  3. `cd custom_components/custom_metrics && zip -r ../../custom_metrics.zip .`
+  3. `cd custom_components/custom_records && zip -r ../../custom_records.zip .`
      (zip root = integration dir contents directly - critical, since HACS
      does no path-stripping for `zip_release`).
-  4. Upload `custom_metrics.zip` as a release asset (e.g. via
+  4. Upload `custom_records.zip` as a release asset (e.g. via
      `softprops/action-gh-release`), name matching hacs.json's `filename`
      exactly.
 - `.github/workflows/lint.yml` gets a plain Node job

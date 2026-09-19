@@ -12,15 +12,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.custom_metrics.const import (
+from custom_components.custom_records.const import (
     ATTR_ENTRY_ID,
     ATTR_RECORD_TYPE,
     DOMAIN,
     EVENT_RECORDS_UPDATED,
     SUBENTRY_TYPE_RECORD_TYPE,
 )
-from custom_components.custom_metrics.models import RecordType
-from custom_components.custom_metrics.store import RecordStorage, SchemaError
+from custom_components.custom_records.models import RecordType
+from custom_components.custom_records.store import RecordStorage, SchemaError
 
 from .conftest import BP_RECORD_TYPE, async_setup_entry_with_types, make_source_image
 
@@ -81,14 +81,20 @@ async def test_setup_entry_fires_updated_event_per_record_type(
     )
     entry.add_to_hass(hass)
     captured: list[dict[str, Any]] = []
+    legacy_events: list[dict[str, Any]] = []
+    assert EVENT_RECORDS_UPDATED == "custom_records_updated"
     hass.bus.async_listen(
-        EVENT_RECORDS_UPDATED, lambda event: captured.append(dict(event.data))
+        "custom_records_updated", lambda event: captured.append(dict(event.data))
+    )
+    hass.bus.async_listen(
+        "custom_metrics_updated", lambda event: legacy_events.append(dict(event.data))
     )
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
     assert captured == [{ATTR_ENTRY_ID: entry.entry_id, ATTR_RECORD_TYPE: "bp"}]
+    assert legacy_events == []
 
 
 async def test_unload_does_not_delete_data(hass: HomeAssistant) -> None:
@@ -155,7 +161,7 @@ async def test_migrates_legacy_options_record_types_on_first_setup(
 ) -> None:
     """An entry created the old way (options, no subentries) migrates on setup."""
     entry = MockConfigEntry(
-        domain="custom_metrics",
+        domain="custom_records",
         data={},
         options={"record_types": [BP_RECORD_TYPE]},
     )
@@ -178,7 +184,7 @@ async def test_missing_table_fails_setup_and_creates_repairs_issue(
     entry = await async_setup_entry_with_types(hass, [BP_RECORD_TYPE])
     assert await hass.config_entries.async_unload(entry.entry_id)
     db_path = Path(
-        hass.config.path(".storage", DOMAIN, f"custom_metrics_{entry.entry_id}.db")
+        hass.config.path(".storage", DOMAIN, f"custom_records_{entry.entry_id}.db")
     )
     await hass.async_add_executor_job(_drop_record_table, db_path, "records_bp")
 

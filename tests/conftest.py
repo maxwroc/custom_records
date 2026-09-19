@@ -1,4 +1,4 @@
-"""Fixtures and shared helpers for custom_metrics tests."""
+"""Fixtures and shared helpers for custom_records tests."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.custom_metrics.const import DOMAIN, SUBENTRY_TYPE_RECORD_TYPE
+from custom_components.custom_records.const import DOMAIN, SUBENTRY_TYPE_RECORD_TYPE
 
 pytest_plugins = "pytest_homeassistant_custom_component"
 
@@ -27,9 +27,9 @@ def auto_enable_custom_integrations(
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_custom_metrics_storage(hass: HomeAssistant) -> Generator[None]:
+def _cleanup_custom_records_storage(hass: HomeAssistant) -> Generator[None]:
     """
-    Remove custom_metrics's on-disk SQLite database directory around each test.
+    Remove custom_records's on-disk SQLite database directory around each test.
 
     Unlike `homeassistant.helpers.storage.Store` (transparently virtualized
     in-memory by PHACC's own `hass_storage` fixture), store.py's

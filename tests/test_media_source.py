@@ -1,4 +1,4 @@
-"""Tests for custom_metrics.media_source."""
+"""Tests for custom_records.media_source."""
 
 # pyright: reportArgumentType=false
 # pyright: reportAttributeAccessIssue=false
@@ -13,8 +13,8 @@ from homeassistant.components.media_source import Unresolvable
 from homeassistant.components.media_source.models import MediaSourceItem
 from homeassistant.core import HomeAssistant
 
-from custom_components.custom_metrics.const import DOMAIN
-from custom_components.custom_metrics.media_source import CustomMetricsMediaSource
+from custom_components.custom_records.const import DOMAIN
+from custom_components.custom_records.media_source import CustomRecordsMediaSource
 
 from .conftest import BP_RECORD_TYPE, async_setup_entry_with_types, make_source_image
 
@@ -48,7 +48,7 @@ async def test_browse_root_only_lists_types_with_image_fields(
 ) -> None:
     """Only record types with an IMAGE field appear at the root."""
     await async_setup_entry_with_types(hass, [BP_RECORD_TYPE, IMAGE_RECORD_TYPE])
-    source = CustomMetricsMediaSource(hass)
+    source = CustomRecordsMediaSource(hass)
 
     root = await source.async_browse_media(_item(hass, None))
 
@@ -71,7 +71,7 @@ async def test_browse_record_type_lists_records_with_images(
         "pets", {}
     )  # no photo, should be skipped
 
-    source = CustomMetricsMediaSource(hass)
+    source = CustomRecordsMediaSource(hass)
     browse = await source.async_browse_media(_item(hass, "pets"))
 
     assert len(browse.children) == 1
@@ -91,19 +91,19 @@ async def test_resolve_media_returns_playmedia(hass: HomeAssistant) -> None:
         "pets", {"photo": filename}
     )
 
-    source = CustomMetricsMediaSource(hass)
+    source = CustomRecordsMediaSource(hass)
     play_media = await source.async_resolve_media(
         _item(hass, f"pets/{record['id']}/photo")
     )
 
     assert play_media.path.is_file()
-    assert play_media.url.endswith(f"/pets/{filename}")
+    assert play_media.url == (f"/custom_records_media/{entry.entry_id}/pets/{filename}")
 
 
 async def test_resolve_media_unknown_record_raises(hass: HomeAssistant) -> None:
     """Resolving an unknown record id raises Unresolvable."""
     await async_setup_entry_with_types(hass, [IMAGE_RECORD_TYPE])
-    source = CustomMetricsMediaSource(hass)
+    source = CustomRecordsMediaSource(hass)
 
     with pytest.raises(Unresolvable):
         await source.async_resolve_media(_item(hass, "pets/missing-id/photo"))
@@ -112,7 +112,7 @@ async def test_resolve_media_unknown_record_raises(hass: HomeAssistant) -> None:
 async def test_resolve_media_invalid_identifier_raises(hass: HomeAssistant) -> None:
     """A malformed identifier raises Unresolvable rather than crashing."""
     await async_setup_entry_with_types(hass, [IMAGE_RECORD_TYPE])
-    source = CustomMetricsMediaSource(hass)
+    source = CustomRecordsMediaSource(hass)
 
     with pytest.raises(Unresolvable):
         await source.async_resolve_media(_item(hass, "not-enough-parts"))

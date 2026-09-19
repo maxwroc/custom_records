@@ -1,4 +1,4 @@
-"""Tests for custom_metrics.filter_query (compiles to SQL, plan_sql.md Phase 2)."""
+"""Tests for custom_records.filter_query (compiles to SQL, plan_sql.md Phase 2)."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ from datetime import UTC, datetime
 import pytest
 from homeassistant.core import HomeAssistant
 
-from custom_components.custom_metrics.const import FieldType
-from custom_components.custom_metrics.filter_query import (
+from custom_components.custom_records.const import FieldType
+from custom_components.custom_records.filter_query import (
     FilterError,
     compile_record_filter,
 )
-from custom_components.custom_metrics.models import FieldDefinition, RecordType
-from custom_components.custom_metrics.store import RecordStorage
+from custom_components.custom_records.models import FieldDefinition, RecordType
+from custom_components.custom_records.store import RecordStorage
 
 RECORD_TYPE = RecordType(
     id="widgets",

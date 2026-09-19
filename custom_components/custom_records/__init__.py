@@ -1,5 +1,5 @@
 """
-Custom Metrics Recorder.
+Custom Records.
 
 A Home Assistant integration for recording user-defined metrics (blood
 pressure, fuel costs, doorbell snapshots, etc.) via a service call, exposed to
@@ -30,7 +30,7 @@ from .export_view import async_register_export_view
 from .frontend import async_register_frontend
 from .media_store import MediaStore, async_register_media_view
 from .models import RecordType
-from .runtime_data import CustomMetricsRuntimeData
+from .runtime_data import CustomRecordsRuntimeData
 from .services import async_setup_services
 from .store import RecordStorage, SchemaError
 from .websocket_api import async_setup_websocket_api
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.typing import ConfigType
 
-    from .runtime_data import CustomMetricsConfigEntry
+    from .runtime_data import CustomRecordsConfigEntry
 
 PURGE_INTERVAL = timedelta(hours=24)
 
@@ -54,7 +54,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-def _load_record_types(entry: CustomMetricsConfigEntry) -> dict[str, RecordType]:
+def _load_record_types(entry: CustomRecordsConfigEntry) -> dict[str, RecordType]:
     """Build the record-type map from the entry's record_type subentries."""
     record_types: dict[str, RecordType] = {}
     for subentry in entry.subentries.values():
@@ -73,7 +73,7 @@ def _load_record_types(entry: CustomMetricsConfigEntry) -> dict[str, RecordType]
 
 
 async def _async_migrate_legacy_options(
-    hass: HomeAssistant, entry: CustomMetricsConfigEntry
+    hass: HomeAssistant, entry: CustomRecordsConfigEntry
 ) -> None:
     """
     One-time migration: convert legacy options-based record types to subentries.
@@ -126,7 +126,7 @@ async def _async_migrate_legacy_options(
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: CustomMetricsConfigEntry
+    hass: HomeAssistant, entry: CustomRecordsConfigEntry
 ) -> bool:
     """Set up this integration's config entry."""
     await _async_migrate_legacy_options(hass, entry)
@@ -152,7 +152,7 @@ async def async_setup_entry(
 
     media_store = MediaStore(hass, entry.entry_id)
 
-    entry.runtime_data = CustomMetricsRuntimeData(
+    entry.runtime_data = CustomRecordsRuntimeData(
         storage=storage, media_store=media_store, record_types=record_types
     )
 
@@ -188,7 +188,7 @@ async def async_setup_entry(
 
 
 async def async_unload_entry(
-    _hass: HomeAssistant, entry: CustomMetricsConfigEntry
+    _hass: HomeAssistant, entry: CustomRecordsConfigEntry
 ) -> bool:
     """
     Unload a config entry: cancel listeners, close the database connection.
@@ -201,7 +201,7 @@ async def async_unload_entry(
 
 
 async def async_remove_entry(
-    hass: HomeAssistant, entry: CustomMetricsConfigEntry
+    hass: HomeAssistant, entry: CustomRecordsConfigEntry
 ) -> None:
     """
     Delete all stored records when the user removes the integration.
@@ -227,7 +227,7 @@ async def async_remove_entry(
 
 
 async def _async_update_listener(
-    hass: HomeAssistant, entry: CustomMetricsConfigEntry
+    hass: HomeAssistant, entry: CustomRecordsConfigEntry
 ) -> None:
     """
     Reload the entry when its record_type subentries change.
@@ -253,7 +253,7 @@ async def _async_update_listener(
 
 
 async def _async_run_purge(
-    hass: HomeAssistant, entry: CustomMetricsConfigEntry
+    hass: HomeAssistant, entry: CustomRecordsConfigEntry
 ) -> None:
     """Purge expired records, enforce max_records, and manage Repairs warnings."""
     runtime_data = entry.runtime_data
