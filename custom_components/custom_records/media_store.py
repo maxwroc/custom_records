@@ -27,7 +27,7 @@ from aiohttp import web
 from homeassistant.components.file_upload import process_uploaded_file
 from homeassistant.helpers.http import HomeAssistantView
 
-from .const import DOMAIN, ENVELOPE_DATA, FieldType
+from .const import DOMAIN, ENVELOPE_DATA, FieldType, RecordOrder
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -279,8 +279,10 @@ class MediaStore:
             if not image_field_keys:
                 continue
 
-            records = await record_storage.async_list_records(record_type_id)
-            referenced = _referenced_filenames(records, image_field_keys)
+            page = await record_storage.async_list_records(
+                record_type_id, order=RecordOrder.ASC
+            )
+            referenced = _referenced_filenames(page.records, image_field_keys)
             target_dir = self._dir_for_type(record_type_id)
             removed_counts[record_type_id] = await self.hass.async_add_executor_job(
                 _remove_unreferenced_files, target_dir, referenced

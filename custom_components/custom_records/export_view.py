@@ -16,7 +16,7 @@ from aiohttp import web
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers.http import HomeAssistantView
 
-from .const import ATTR_INCLUDE_ID, DOMAIN, EXPORT_URL_PREFIX
+from .const import ATTR_INCLUDE_ID, DOMAIN, EXPORT_URL_PREFIX, RecordOrder
 from .csv_transfer import build_export_csv
 
 if TYPE_CHECKING:
@@ -62,8 +62,10 @@ class CustomRecordsExportView(HomeAssistantView):
             raise web.HTTPNotFound
 
         include_id = request.query.get(ATTR_INCLUDE_ID, "true").lower() != "false"
-        records = await runtime_data.storage.async_list_records(record_type_id)
-        csv_text = build_export_csv(record_type, records, include_id=include_id)
+        page = await runtime_data.storage.async_list_records(
+            record_type_id, order=RecordOrder.ASC
+        )
+        csv_text = build_export_csv(record_type, page.records, include_id=include_id)
 
         return web.Response(
             text=csv_text,

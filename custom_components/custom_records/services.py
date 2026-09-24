@@ -21,6 +21,7 @@ from .const import (
     SERVICE_ADD_RECORD,
     SERVICE_EXPORT_RECORDS,
     SERVICE_IMPORT_RECORDS,
+    RecordOrder,
 )
 from .csv_transfer import build_export_csv, parse_import_csv
 from .media_store import (
@@ -147,9 +148,11 @@ async def _async_export_records(call: ServiceCall) -> ServiceResponse:
     record_type_id = call.data[ATTR_RECORD_TYPE]
     record_type = _get_record_type(runtime_data, record_type_id)
 
-    records = await runtime_data.storage.async_list_records(record_type_id)
+    page = await runtime_data.storage.async_list_records(
+        record_type_id, order=RecordOrder.ASC
+    )
     csv_text = build_export_csv(
-        record_type, records, include_id=call.data[ATTR_INCLUDE_ID]
+        record_type, page.records, include_id=call.data[ATTR_INCLUDE_ID]
     )
 
     path = call.data.get(ATTR_PATH)

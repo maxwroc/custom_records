@@ -54,7 +54,9 @@ from .const import (
     AggregateBucket,
     AggregateOp,
     FieldType,
+    RecordOrder,
 )
+from .pagination import RecordPosition
 from .sql_encoding import (
     CompiledFilter,
     decode_field,
@@ -81,6 +83,14 @@ class ImportSummary:
 
     imported: int
     skipped_duplicate: int
+
+
+@dataclass(frozen=True, slots=True)
+class RecordsPage:
+    """Live records and an optional continuation key for a limited read."""
+
+    records: list[dict[str, Any]]
+    next_position: RecordPosition | None
 
 
 class SchemaError(RuntimeError):
@@ -694,44 +704,64 @@ class RecordStorage:
             ENVELOPE_DATA: stored_data,
         }
 
-    async def async_list_records(
+    async def async_list_records(  # noqa: PLR0913
         self,
         record_type_id: str,
+        *,
+        order: RecordOrder,
+        limit: int | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
-        limit: int | None = None,
         where: CompiledFilter | None = None,
-    ) -> list[dict[str, Any]]:
+        position: RecordPosition | None = None,
+    ) -> RecordsPage:
         """
-        Return records for a record type, optionally range/filter-bounded.
+        Read records in explicit `(timestamp, id)` key order.
 
-        Ordering is explicit (plan_sql.md Phase 1 pt.5): with a `limit`,
-        results come back newest-first (`ORDER BY timestamp DESC, id DESC`)
-        before truncating; without one (range/export/media-scan reads),
-        results come back oldest-first (`ORDER BY timestamp ASC, id ASC`).
+        `position` is exclusive: reading continues strictly after that key in
+        the requested direction. A finite `limit` fetches one lookahead row to
+        decide whether `next_position` (the last returned key) is set;
+        unlimited reads return every matching row and never continue.
         """
+        order = RecordOrder(order)
+        if limit is not None and (type(limit) is not int or limit < 1):
+            msg = "Page size must be positive"
+            raise ValueError(msg)
         await self._wait_until_available()
         record_type = self._record_types.get(record_type_id)
         if record_type is None:
-            return []
+            return RecordsPage([], None)
         conn = self._require_conn()
-
         where_sql, params = _build_where_clause(start, end, where)
-
         ts_col = quote_identifier(COL_TIMESTAMP)
         id_col = quote_identifier(COL_ID)
-        if limit is not None:
-            order_sql = f" ORDER BY {ts_col} DESC, {id_col} DESC LIMIT {int(limit)}"
-        else:
-            order_sql = f" ORDER BY {ts_col} ASC, {id_col} ASC"
+        if position is not None:
+            where_sql += " AND " if where_sql else " WHERE "
+            comparison = "<" if order is RecordOrder.DESC else ">"
+            where_sql += f"({ts_col}, {id_col}) {comparison} (?, ?)"
+            params.extend((position.timestamp_micros, position.record_id))
         table = quote_identifier(record_type.sql_table)
-        sql = f"SELECT * FROM {table}{where_sql}{order_sql}"  # noqa: S608
+        direction = order.value.upper()
+        sql = (
+            f"SELECT * FROM {table}{where_sql} "  # noqa: S608
+            f"ORDER BY {ts_col} {direction}, {id_col} {direction}"
+        )
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit + 1)
 
         def _query() -> list[sqlite3.Row]:
             return conn.execute(sql, params).fetchall()
 
         rows = await self._run(_query)
-        return [self._row_to_envelope(record_type, row) for row in rows]
+        next_position = None
+        if limit is not None and len(rows) > limit:
+            last = rows[limit - 1]
+            next_position = RecordPosition(last[COL_TIMESTAMP], last[COL_ID])
+        return RecordsPage(
+            [self._row_to_envelope(record_type, row) for row in rows[:limit]],
+            next_position,
+        )
 
     async def async_delete_record(self, record_type_id: str, record_id: str) -> bool:
         """Delete a single record by id. Returns True if a record was removed."""

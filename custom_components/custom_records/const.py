@@ -37,6 +37,18 @@ ATTR_MEDIA_SOURCE = "media_source"
 ATTR_LIMIT = "limit"
 MAX_LIST_RECORDS_LIMIT = 500
 
+PAGINATION_CURSOR_IDLE_SECONDS = 30 * 60
+PAGINATION_CURSOR_MAX_ENTRIES = 1024
+PAGINATION_CURSOR_MAX_BYTES = 4 * 1024 * 1024
+
+
+class RecordOrder(StrEnum):
+    """Timestamp and binary ID traversal direction."""
+
+    ASC = "asc"
+    DESC = "desc"
+
+
 # custom_records/list_records WebSocket command: optional server-side row
 # filter (P0-9) - a list of single-key {field_key: value} maps, AND-combined.
 # See filter_query.py for the compiled SQL WHERE fragment this is turned into.

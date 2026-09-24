@@ -49,9 +49,11 @@ from .const import (
     AggregateFormat,
     AggregateOp,
     FieldType,
+    RecordOrder,
 )
 from .filter_query import FilterError, compile_record_filter
 from .media_store import ImageStoreError, async_validate_image_path
+from .pagination import CursorError, query_scope
 from .record_view import to_public_record
 from .schema import validate_record_data
 from .sql_encoding import is_finite_number
@@ -114,10 +116,13 @@ async def handle_list_record_types(
         vol.Optional("end"): str,
         vol.Optional(ATTR_LIMIT): vol.All(int, vol.Range(min=1)),
         vol.Optional(ATTR_FILTER): list,
+        vol.Optional("paginate", default=False): bool,
+        vol.Optional("order", default=RecordOrder.DESC.value): vol.Coerce(RecordOrder),
+        vol.Optional("cursor"): object,
     }
 )
 @async_response
-async def handle_list_records(
+async def handle_list_records(  # noqa: PLR0911 (independent validation errors)
     hass: HomeAssistant,
     connection: ActiveConnection,
     msg: dict[str, Any],
@@ -132,6 +137,11 @@ async def handle_list_records(
     if record_type is None:
         connection.send_error(
             msg["id"], "unknown_record_type", f"Unknown record_type '{record_type_id}'"
+        )
+        return
+    if "cursor" in msg and not msg["paginate"]:
+        connection.send_error(
+            msg["id"], "invalid_cursor", "Cursor requires paginate: true"
         )
         return
     try:
@@ -156,12 +166,42 @@ async def handle_list_records(
         limit = min(msg[ATTR_LIMIT], MAX_LIST_RECORDS_LIMIT)
     else:
         limit = MAX_LIST_RECORDS_LIMIT
-    records = await runtime_data.storage.async_list_records(
-        record_type_id, start=start, end=end, limit=limit, where=where
+    order: RecordOrder = msg["order"]
+    cursors = runtime_data.cursors
+    scope = (
+        query_scope(record_type_id, start, end, where, order)
+        if msg["paginate"]
+        else None
     )
-    connection.send_result(
-        msg["id"], {"records": [to_public_record(r, record_type) for r in records]}
-    )
+    try:
+        position = (
+            cursors.resolve(msg["cursor"], scope)
+            if scope is not None and msg.get("cursor") is not None
+            else None
+        )
+        page = await runtime_data.storage.async_list_records(
+            record_type_id,
+            order=order,
+            start=start,
+            end=end,
+            limit=limit,
+            where=where,
+            position=position,
+        )
+        result: dict[str, Any] = {
+            "records": [to_public_record(r, record_type) for r in page.records]
+        }
+        if scope is not None:
+            cursor = (
+                cursors.issue(scope, page.next_position)
+                if page.next_position is not None
+                else None
+            )
+            result.update(has_more=cursor is not None, next_cursor=cursor)
+    except CursorError as err:
+        connection.send_error(msg["id"], err.code, str(err))
+        return
+    connection.send_result(msg["id"], result)
 
 
 def _validate_aggregate_field(
