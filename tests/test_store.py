@@ -15,6 +15,7 @@ from custom_components.custom_records.const import (
     ATTR_RECORD_TYPE,
     EVENT_RECORDS_UPDATED,
     FieldType,
+    RecordOrder,
 )
 from custom_components.custom_records.csv_transfer import ImportRow
 from custom_components.custom_records.models import FieldDefinition, RecordType
@@ -62,7 +63,7 @@ async def test_add_list_delete_record(hass: HomeAssistant) -> None:
 
     record = await storage.async_add_record("bp", {"systolic": 120})
     assert await storage.async_record_count("bp") == 1
-    listed = await storage.async_list_records("bp")
+    listed = (await storage.async_list_records("bp", order=RecordOrder.ASC)).records
     assert listed == [record]
 
     assert await storage.async_delete_record("bp", record["id"]) is True
@@ -80,12 +81,14 @@ async def test_list_records_limit_sorts_desc_and_truncates(hass: HomeAssistant) 
             "bp", {"i": i}, timestamp=now + timedelta(seconds=i)
         )
 
-    limited = await storage.async_list_records("bp", limit=2)
+    limited = (
+        await storage.async_list_records("bp", limit=2, order=RecordOrder.DESC)
+    ).records
     assert [r["d"]["i"] for r in limited] == [4, 3]
 
-    unlimited = await storage.async_list_records("bp")
+    unlimited = (await storage.async_list_records("bp", order=RecordOrder.ASC)).records
     assert len(unlimited) == 5
-    # Unbounded reads come back oldest-first (plan_sql.md Phase 1 pt.5).
+    # The caller explicitly chooses chronological order for this full read.
     assert [r["d"]["i"] for r in unlimited] == [0, 1, 2, 3, 4]
 
 
@@ -102,10 +105,16 @@ async def test_list_records_where_filters_and_combines_with_limit(
         )
 
     where = CompiledFilter(sql='"i" % 2 = 0')
-    filtered = await storage.async_list_records("bp", where=where)
+    filtered = (
+        await storage.async_list_records("bp", where=where, order=RecordOrder.ASC)
+    ).records
     assert [r["d"]["i"] for r in filtered] == [0, 2, 4]
 
-    filtered_limited = await storage.async_list_records("bp", where=where, limit=1)
+    filtered_limited = (
+        await storage.async_list_records(
+            "bp", where=where, limit=1, order=RecordOrder.DESC
+        )
+    ).records
     assert [r["d"]["i"] for r in filtered_limited] == [4]
 
 
@@ -146,7 +155,7 @@ async def test_purge_expired_removes_old_records(hass: HomeAssistant) -> None:
 
     removed = await storage.async_purge_expired({"bp": 5})
     assert removed == {"bp": 1}
-    remaining = await storage.async_list_records("bp")
+    remaining = (await storage.async_list_records("bp", order=RecordOrder.ASC)).records
     assert len(remaining) == 1
     assert remaining[0]["d"]["systolic"] == 2
 
@@ -185,7 +194,7 @@ async def test_max_records_enforced_drops_oldest(hass: HomeAssistant) -> None:
 
     removed = await storage.async_enforce_max_records({"bp": 2})
     assert removed == {"bp": 1}
-    remaining = await storage.async_list_records("bp")
+    remaining = (await storage.async_list_records("bp", order=RecordOrder.ASC)).records
     assert [r["d"]["i"] for r in remaining] == [1, 2]
 
 
@@ -299,7 +308,7 @@ async def test_import_records_appends_new_rows(hass: HomeAssistant) -> None:
     assert summary.imported == 2
     assert summary.skipped_duplicate == 0
     assert await storage.async_record_count("bp") == 2
-    records = await storage.async_list_records("bp")
+    records = (await storage.async_list_records("bp", order=RecordOrder.ASC)).records
     ids = {r["id"] for r in records}
     assert "row-1" in ids
 
@@ -322,7 +331,7 @@ async def test_import_records_skips_duplicate_ids(hass: HomeAssistant) -> None:
     assert summary.skipped_duplicate == 1
     assert await storage.async_record_count("bp") == 2
     # The original record's data is untouched (not overwritten).
-    records = await storage.async_list_records("bp")
+    records = (await storage.async_list_records("bp", order=RecordOrder.ASC)).records
     original = next(r for r in records if r["id"] == existing["id"])
     assert original["d"]["i"] == 0
 
@@ -483,7 +492,7 @@ async def test_add_field_alters_existing_table(hass: HomeAssistant) -> None:
     await storage.async_ensure_record_type(extended)
     record = await storage.async_add_record("bp", {"systolic": 130, "pulse": 65})
 
-    records = await storage.async_list_records("bp")
+    records = (await storage.async_list_records("bp", order=RecordOrder.ASC)).records
     assert len(records) == 2
     assert record["d"]["pulse"] == 65
 

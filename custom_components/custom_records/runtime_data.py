@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 
+from .pagination import CursorCache
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -25,3 +27,4 @@ class CustomRecordsRuntimeData:
     media_store: MediaStore
     record_types: dict[str, RecordType] = field(default_factory=dict)
     unsub_purge_interval: Callable[[], None] | None = None
+    cursors: CursorCache = field(default_factory=CursorCache)

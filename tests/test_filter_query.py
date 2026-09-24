@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from homeassistant.core import HomeAssistant
 
-from custom_components.custom_records.const import FieldType
+from custom_components.custom_records.const import FieldType, RecordOrder
 from custom_components.custom_records.filter_query import (
     FilterError,
     compile_record_filter,
@@ -212,7 +212,11 @@ async def test_multi_select_membership_end_to_end(hass: HomeAssistant) -> None:
     await storage.async_add_record(RECORD_TYPE.id, {"tags": ["c"]})
 
     where = compile_record_filter(RECORD_TYPE, [{"tags": "a"}])
-    matched = await storage.async_list_records(RECORD_TYPE.id, where=where)
+    matched = (
+        await storage.async_list_records(
+            RECORD_TYPE.id, where=where, order=RecordOrder.ASC
+        )
+    ).records
     assert [r["d"]["tags"] for r in matched] == [["a", "b"]]
 
 
@@ -226,5 +230,13 @@ async def test_missing_optional_field_matches_neither_eq_nor_ne(
 
     eq_where = compile_record_filter(RECORD_TYPE, [{"count": 5}])
     ne_where = compile_record_filter(RECORD_TYPE, [{"count": "!= 5"}])
-    assert await storage.async_list_records(RECORD_TYPE.id, where=eq_where) == []
-    assert await storage.async_list_records(RECORD_TYPE.id, where=ne_where) == []
+    assert (
+        await storage.async_list_records(
+            RECORD_TYPE.id, where=eq_where, order=RecordOrder.ASC
+        )
+    ).records == []
+    assert (
+        await storage.async_list_records(
+            RECORD_TYPE.id, where=ne_where, order=RecordOrder.ASC
+        )
+    ).records == []

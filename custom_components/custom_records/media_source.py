@@ -29,7 +29,7 @@ from homeassistant.components.media_source import (
 )
 from homeassistant.config_entries import ConfigEntryState
 
-from .const import DOMAIN, ENVELOPE_DATA, ENVELOPE_ID, FieldType
+from .const import DOMAIN, ENVELOPE_DATA, ENVELOPE_ID, FieldType, RecordOrder
 from .media_store import MEDIA_URL_PREFIX
 
 if TYPE_CHECKING:
@@ -72,9 +72,11 @@ class CustomRecordsMediaSource(MediaSource):
             msg = "Invalid media identifier"
             raise Unresolvable(msg) from err
 
-        records = await runtime_data.storage.async_list_records(record_type_id)
+        page = await runtime_data.storage.async_list_records(
+            record_type_id, order=RecordOrder.ASC
+        )
         record = next(
-            (r for r in records if r[ENVELOPE_ID] == record_id),
+            (r for r in page.records if r[ENVELOPE_ID] == record_id),
             None,
         )
         if record is None:
@@ -146,8 +148,10 @@ class CustomRecordsMediaSource(MediaSource):
             f.key for f in record_type.fields if f.type is FieldType.IMAGE
         ]
         children = []
-        records = await runtime_data.storage.async_list_records(record_type_id)
-        for record in records:
+        page = await runtime_data.storage.async_list_records(
+            record_type_id, order=RecordOrder.ASC
+        )
+        for record in page.records:
             for field_key in image_field_keys:
                 value = record[ENVELOPE_DATA].get(field_key)
                 if not isinstance(value, str) or not value:
