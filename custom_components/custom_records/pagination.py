@@ -6,7 +6,6 @@ import hashlib
 import json
 import re
 import secrets
-import sys
 from collections import OrderedDict
 from dataclasses import dataclass
 from time import monotonic
@@ -55,11 +54,10 @@ class _CursorState:
     scope: str
     position: RecordPosition
     last_used: float
-    size: int = 0
+    size: int
 
 
-def query_scope(  # noqa: PLR0913 (one argument per query dimension)
-    entry_id: str,
+def query_scope(
     record_type_id: str,
     start: datetime | None,
     end: datetime | None,
@@ -70,7 +68,6 @@ def query_scope(  # noqa: PLR0913 (one argument per query dimension)
     encoded = json.dumps(
         [
             order.value,
-            entry_id,
             record_type_id,
             to_epoch_micros(start) if start is not None else None,
             to_epoch_micros(end) if end is not None else None,
@@ -97,6 +94,7 @@ class CursorCache:
             msg = "Cursor cache limits must be positive"
             raise ValueError(msg)
         self._entries: OrderedDict[str, _CursorState] = OrderedDict()
+        self._handles: dict[tuple[str, RecordPosition], str] = {}
         self._bytes = 0
         self._max_entries = max_entries
         self._max_bytes = max_bytes
@@ -104,6 +102,7 @@ class CursorCache:
 
     def _evict_oldest(self) -> None:
         _, state = self._entries.popitem(last=False)
+        del self._handles[state.scope, state.position]
         self._bytes -= state.size
 
     def _expire(self, now: float) -> None:
@@ -136,36 +135,36 @@ class CursorCache:
         return state.position
 
     def issue(self, scope: str, position: RecordPosition) -> str:
-        """Store an exact position, evicting old handles within fixed budgets."""
+        """
+        Store an exact position, evicting old handles within fixed budgets.
+
+        Re-issuing a live (scope, position) pair renews and returns its
+        existing handle, so repeated reads of one page do not grow the cache.
+        """
         now = monotonic()
         self._expire(now)
-        handle = secrets.token_urlsafe(32)
-        while handle in self._entries:
-            handle = secrets.token_urlsafe(32)
-        state = _CursorState(scope, position, now)
-        state.size = _ENTRY_OVERHEAD_BYTES + sum(
-            sys.getsizeof(value)
-            for value in (
-                handle,
-                state,
-                scope,
-                position,
-                position.timestamp_micros,
-                position.record_id,
-                now,
-                state.size,
-            )
+        existing = self._handles.get((scope, position))
+        if existing is not None:
+            self._entries[existing].last_used = now
+            self._entries.move_to_end(existing)
+            return existing
+        size = (
+            _ENTRY_OVERHEAD_BYTES + len(scope) + len(position.record_id.encode("utf-8"))
         )
-        if state.size > self._max_bytes:
+        if size > self._max_bytes:
             raise CursorError(
                 _RESOURCE_LIMIT,
                 "Record cursor exceeds the pagination memory budget",
             )
         while self._entries and (
             len(self._entries) >= self._max_entries
-            or self._bytes + state.size > self._max_bytes
+            or self._bytes + size > self._max_bytes
         ):
             self._evict_oldest()
-        self._entries[handle] = state
-        self._bytes += state.size
+        handle = secrets.token_urlsafe(32)
+        while handle in self._entries:
+            handle = secrets.token_urlsafe(32)
+        self._entries[handle] = _CursorState(scope, position, now, size)
+        self._handles[scope, position] = handle
+        self._bytes += size
         return handle

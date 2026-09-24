@@ -68,6 +68,7 @@ async def test_paginate_1001_tied_records(
         "order": order,
     }
     seen = []
+    result: dict[str, Any] = {}
     for request_id in range(1, 4):
         await client.send_json({"id": request_id, **query})
         response = await client.receive_json()
@@ -126,7 +127,7 @@ async def test_page_lookahead_contract(
     assert (result["next_cursor"] is not None) == (count > 20)
 
 
-@pytest.mark.parametrize("cursor", [None, "", 5, {}, "x" * 10000, "!" * 43])
+@pytest.mark.parametrize("cursor", ["", 5, {}, "x" * 10000, "!" * 43])
 async def test_invalid_cursor_shapes(
     hass: HomeAssistant, hass_ws_client: WebSocketGenerator, cursor: object
 ) -> None:
@@ -146,9 +147,45 @@ async def test_invalid_cursor_shapes(
     assert response["error"]["code"] == "invalid_cursor"
 
 
+async def test_null_cursor_reads_first_page_and_retries_reuse_handle(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> None:
+    """`cursor: null` starts from the top; repeating a page returns one handle."""
+    entry = await async_setup_entry_with_types(hass, [BP_RECORD_TYPE])
+    await entry.runtime_data.storage.async_import_records(
+        "bp",
+        [
+            ImportRow(id=str(n), timestamp=None, fields={"systolic": n})
+            for n in range(3)
+        ],
+    )
+    client = await hass_ws_client(hass)
+    results = []
+    for msg_id, cursor in enumerate((None, None), start=1):
+        await client.send_json(
+            {
+                "id": msg_id,
+                "type": "custom_records/list_records",
+                "record_type": "bp",
+                "paginate": True,
+                "limit": 2,
+                "cursor": cursor,
+            }
+        )
+        results.append((await client.receive_json())["result"])
+    assert [r["id"] for r in results[0]["records"]] == ["2", "1"]
+    assert results[0]["has_more"] is True
+    assert results[1]["next_cursor"] == results[0]["next_cursor"]
+
+
 @pytest.mark.parametrize("paginate", [False, None])
+@pytest.mark.parametrize("cursor", ["a" * 43, None])
 async def test_cursor_requires_opt_in(
-    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, *, paginate: bool | None
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    *,
+    paginate: bool | None,
+    cursor: str | None,
 ) -> None:
     """Neither absent nor false pagination silently ignores a cursor."""
     await async_setup_entry_with_types(hass, [BP_RECORD_TYPE])
@@ -157,7 +194,7 @@ async def test_cursor_requires_opt_in(
         "id": 1,
         "type": "custom_records/list_records",
         "record_type": "bp",
-        "cursor": "a" * 43,
+        "cursor": cursor,
     }
     if paginate is not None:
         request["paginate"] = paginate
@@ -370,6 +407,7 @@ async def test_explicit_order_independent_of_limit(
     if order is not None:
         query["order"] = order
     expected = ["0", "1", "2"] if order == "asc" else ["2", "1", "0"]
+    result: dict[str, Any] = {}
     for request_id, extra in enumerate(({}, {"limit": 1}), 1):
         await client.send_json({"id": request_id, **query, **extra})
         result = (await client.receive_json())["result"]
@@ -400,10 +438,16 @@ async def test_non_paginated_reads_allocate_no_cursor(
         ],
     )
     client = await hass_ws_client(hass)
-    with patch.object(
-        entry.runtime_data.cursors,
-        "issue",
-        side_effect=AssertionError("No cursor expected"),
+    with (
+        patch.object(
+            entry.runtime_data.cursors,
+            "issue",
+            side_effect=AssertionError("No cursor expected"),
+        ),
+        patch(
+            "custom_components.custom_records.websocket_api.query_scope",
+            side_effect=AssertionError("No scope expected"),
+        ),
     ):
         await client.send_json(
             {

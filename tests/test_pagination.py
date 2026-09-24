@@ -64,23 +64,52 @@ def test_cursor_scope_and_runtime_isolation() -> None:
 def test_cursor_entry_budget_uses_lru() -> None:
     """Only the least recently used handle is evicted when capacity is reached."""
     cache = CursorCache(max_entries=2)
-    position = RecordPosition(123, "id")
-    first = cache.issue("scope", position)
-    second = cache.issue("scope", position)
+    first_position = RecordPosition(1, "id")
+    second_position = RecordPosition(2, "id")
+    third_position = RecordPosition(3, "id")
+    first = cache.issue("scope", first_position)
+    second = cache.issue("scope", second_position)
     cache.resolve(first, "scope")
-    third = cache.issue("scope", position)
-    assert cache.resolve(first, "scope") == position
-    assert cache.resolve(third, "scope") == position
+    third = cache.issue("scope", third_position)
+    assert cache.resolve(first, "scope") == first_position
+    assert cache.resolve(third, "scope") == third_position
     with pytest.raises(CursorError) as error:
         cache.resolve(second, "scope")
     assert error.value.code == "cursor_expired"
 
 
+def test_reissuing_same_position_reuses_and_renews_handle() -> None:
+    """Repeated page reads share one handle; distinct scopes/positions do not."""
+    cache = CursorCache(max_entries=2)
+    position = RecordPosition(123, "id")
+    with patch("custom_components.custom_records.pagination.monotonic") as clock:
+        clock.return_value = 0
+        handle = cache.issue("scope", position)
+        clock.return_value = 1799
+        assert cache.issue("scope", position) == handle
+        assert cache.issue("other", position) != handle
+        clock.return_value = 3598
+        assert cache.resolve(handle, "scope") == position
+        assert cache.issue("scope", RecordPosition(124, "id")) != handle
+
+
+def test_evicted_position_gets_fresh_handle() -> None:
+    """Eviction drops the reuse mapping, so a later issue allocates anew."""
+    cache = CursorCache(max_entries=1)
+    position = RecordPosition(123, "id")
+    first = cache.issue("scope", position)
+    cache.issue("scope", RecordPosition(124, "id"))
+    renewed = cache.issue("scope", position)
+    assert renewed != first
+    assert cache.resolve(renewed, "scope") == position
+
+
 def test_cursor_byte_budget_and_oversized_id() -> None:
     """Large opaque IDs count toward memory and are never truncated."""
     cache = CursorCache(max_bytes=6000)
-    position = RecordPosition(123, "x" * 3500)
-    first = cache.issue("scope", position)
+    first_position = RecordPosition(123, "x" * 3500)
+    position = RecordPosition(123, "y" * 3500)
+    first = cache.issue("scope", first_position)
     second = cache.issue("scope", position)
     with pytest.raises(CursorError) as evicted:
         cache.resolve(first, "scope")
@@ -111,19 +140,15 @@ def test_query_scope_normalizes_instants_and_binds_query() -> None:
     start = datetime(1969, 12, 31, 23, 59, 59, 999999, tzinfo=UTC)
     end = start + timedelta(days=1)
     where = CompiledFilter('"amount" > ?', [1.0])
-    scope = query_scope("entry", "type", start, end, where, RecordOrder.DESC)
-    assert query_scope("entry", "type", start, end, where, RecordOrder.ASC) != scope
+    scope = query_scope("type", start, end, where, RecordOrder.DESC)
+    assert query_scope("type", start, end, where, RecordOrder.ASC) != scope
     same_start = datetime.fromisoformat("1970-01-01T00:59:59.999999+01:00")
-    assert (
-        query_scope("entry", "type", same_start, end, where, RecordOrder.DESC) == scope
-    )
-    assert query_scope("other", "type", start, end, where, RecordOrder.DESC) != scope
-    assert query_scope("entry", "other", start, end, where, RecordOrder.DESC) != scope
-    assert query_scope("entry", "type", start, None, where, RecordOrder.DESC) != scope
-    assert query_scope("entry", "type", None, end, where, RecordOrder.DESC) != scope
+    assert query_scope("type", same_start, end, where, RecordOrder.DESC) == scope
+    assert query_scope("other", start, end, where, RecordOrder.DESC) != scope
+    assert query_scope("type", start, None, where, RecordOrder.DESC) != scope
+    assert query_scope("type", None, end, where, RecordOrder.DESC) != scope
     assert (
         query_scope(
-            "entry",
             "type",
             start + timedelta(microseconds=1),
             end,
@@ -134,7 +159,6 @@ def test_query_scope_normalizes_instants_and_binds_query() -> None:
     )
     assert (
         query_scope(
-            "entry",
             "type",
             start,
             end,

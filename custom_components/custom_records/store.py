@@ -85,7 +85,7 @@ class ImportSummary:
     skipped_duplicate: int
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class RecordsPage:
     """Live records and an optional continuation key for a limited read."""
 
@@ -715,7 +715,14 @@ class RecordStorage:
         where: CompiledFilter | None = None,
         position: RecordPosition | None = None,
     ) -> RecordsPage:
-        """Read in explicit key order; unlimited reads have no continuation."""
+        """
+        Read records in explicit `(timestamp, id)` key order.
+
+        `position` is exclusive: reading continues strictly after that key in
+        the requested direction. A finite `limit` fetches one lookahead row to
+        decide whether `next_position` (the last returned key) is set;
+        unlimited reads return every matching row and never continue.
+        """
         order = RecordOrder(order)
         if limit is not None and (type(limit) is not int or limit < 1):
             msg = "Page size must be positive"

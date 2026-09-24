@@ -167,13 +167,16 @@ async def handle_list_records(  # noqa: PLR0911 (independent validation errors)
     else:
         limit = MAX_LIST_RECORDS_LIMIT
     order: RecordOrder = msg["order"]
-    scope = query_scope(
-        runtime_data.storage.entry_id, record_type_id, start, end, where, order
+    cursors = runtime_data.cursors
+    scope = (
+        query_scope(record_type_id, start, end, where, order)
+        if msg["paginate"]
+        else None
     )
     try:
         position = (
-            runtime_data.cursors.resolve(msg["cursor"], scope)
-            if "cursor" in msg
+            cursors.resolve(msg["cursor"], scope)
+            if scope is not None and msg.get("cursor") is not None
             else None
         )
         page = await runtime_data.storage.async_list_records(
@@ -188,9 +191,9 @@ async def handle_list_records(  # noqa: PLR0911 (independent validation errors)
         result: dict[str, Any] = {
             "records": [to_public_record(r, record_type) for r in page.records]
         }
-        if msg["paginate"]:
+        if scope is not None:
             cursor = (
-                runtime_data.cursors.issue(scope, page.next_position)
+                cursors.issue(scope, page.next_position)
                 if page.next_position is not None
                 else None
             )
