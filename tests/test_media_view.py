@@ -79,3 +79,16 @@ async def test_path_traversal_filename_rejected(
     resp = await client.get(f"/{DOMAIN}_media/{entry_id}/bp/..%2f..%2fsecret.jpg")
 
     assert resp.status in (400, 404)
+
+
+async def test_backslash_filename_rejected(
+    hass: HomeAssistant, hass_client: ClientSessionGenerator
+) -> None:
+    """A filename with a Windows path separator is rejected with 400."""
+    await _setup_view(hass)
+    entry_id = f"entry-{uuid4().hex}"
+
+    client = await hass_client()
+    resp = await client.get(f"/{DOMAIN}_media/{entry_id}/bp/a%5Cb.jpg")
+
+    assert resp.status == 400

@@ -763,6 +763,65 @@ class RecordStorage:
             next_position,
         )
 
+    async def async_get_record(
+        self, record_type_id: str, record_id: str
+    ) -> dict[str, Any] | None:
+        """Return one record by primary key, or None if it does not exist."""
+        await self._wait_until_available()
+        record_type = self._record_types.get(record_type_id)
+        if record_type is None:
+            return None
+        conn = self._require_conn()
+        table = quote_identifier(record_type.sql_table)
+        sql = f"SELECT * FROM {table} WHERE {quote_identifier(COL_ID)} = ?"  # noqa: S608
+
+        def _query() -> sqlite3.Row | None:
+            return conn.execute(sql, (record_id,)).fetchone()
+
+        row = await self._run(_query)
+        return self._row_to_envelope(record_type, row) if row is not None else None
+
+    async def async_list_image_references(
+        self, record_type_id: str
+    ) -> list[tuple[str, dict[str, str]]]:
+        """
+        Return `(record_id, {field_key: filename})` for records with images.
+
+        Reads only the ID and image columns (oldest first) and skips records
+        without any stored image, so media scans avoid decoding whole rows.
+        """
+        await self._wait_until_available()
+        record_type = self._record_types.get(record_type_id)
+        if record_type is None:
+            return []
+        image_fields = [f for f in record_type.fields if f.type is FieldType.IMAGE]
+        if not image_fields:
+            return []
+        conn = self._require_conn()
+        id_col = quote_identifier(COL_ID)
+        ts_col = quote_identifier(COL_TIMESTAMP)
+        image_cols = [quote_identifier(f.sql_column) for f in image_fields]
+        table = quote_identifier(record_type.sql_table)
+        any_image = " OR ".join(f"{col} IS NOT NULL" for col in image_cols)
+        sql = (
+            f"SELECT {id_col}, {', '.join(image_cols)} FROM {table} "  # noqa: S608
+            f"WHERE {any_image} ORDER BY {ts_col} ASC, {id_col} ASC"
+        )
+
+        def _query() -> list[sqlite3.Row]:
+            return conn.execute(sql).fetchall()
+
+        references: list[tuple[str, dict[str, str]]] = []
+        for row in await self._run(_query):
+            filenames = {}
+            for field_def in image_fields:
+                value = decode_field(field_def, row[field_def.sql_column])
+                if isinstance(value, str) and value:
+                    filenames[field_def.key] = value
+            if filenames:
+                references.append((row[COL_ID], filenames))
+        return references
+
     async def async_delete_record(self, record_type_id: str, record_id: str) -> bool:
         """Delete a single record by id. Returns True if a record was removed."""
         await self._wait_until_available()

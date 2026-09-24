@@ -27,7 +27,7 @@ from aiohttp import web
 from homeassistant.components.file_upload import process_uploaded_file
 from homeassistant.helpers.http import HomeAssistantView
 
-from .const import DOMAIN, ENVELOPE_DATA, FieldType, RecordOrder
+from .const import DOMAIN, FieldType
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -163,11 +163,12 @@ class CustomRecordsMediaView(HomeAssistantView):
     ) -> web.FileResponse:
         """Handle a GET request for a single stored image file."""
         del request
-        if "/" in filename or ".." in filename:
-            raise web.HTTPBadRequest
-        path = await MediaStore(self.hass, entry_id).async_resolve_image_path(
-            record_type_id, filename
-        )
+        try:
+            path = await MediaStore(self.hass, entry_id).async_resolve_image_path(
+                record_type_id, filename
+            )
+        except ValueError as err:
+            raise web.HTTPBadRequest from err
         if not await self.hass.async_add_executor_job(path.is_file):
             raise web.HTTPNotFound
         return web.FileResponse(path)
@@ -198,6 +199,22 @@ class MediaStore:
             msg = f"Invalid record type id '{record_type_id}'"
             raise ValueError(msg)
         return target
+
+    def _image_path(self, record_type_id: str, filename: str) -> Path:
+        """
+        Return a stored image's path, rejecting anything but a plain filename.
+
+        Stored values can come from CSV imports, so never trust them as paths.
+        """
+        if (
+            not filename
+            or filename == "."
+            or ".." in filename
+            or any(sep in filename for sep in ("/", "\\", "\0"))
+        ):
+            msg = f"Invalid image filename '{filename}'"
+            raise ValueError(msg)
+        return self._dir_for_type(record_type_id) / filename
 
     async def async_store_image(self, record_type_id: str, source_path: str) -> str:
         """Copy source_path into the managed media dir; return the stored filename."""
@@ -243,14 +260,15 @@ class MediaStore:
     async def async_resolve_image_path(
         self, record_type_id: str, filename: str
     ) -> Path:
-        """Return the absolute path to a stored image file."""
-        return self._dir_for_type(record_type_id) / filename
+        """Return the absolute path to a stored image file (ValueError if unsafe)."""
+        return self._image_path(record_type_id, filename)
 
     async def async_delete_image(self, record_type_id: str, filename: str) -> None:
         """Delete a single stored image file, ignoring if already missing."""
+        path = self._image_path(record_type_id, filename)
 
         def _delete() -> None:
-            (self._dir_for_type(record_type_id) / filename).unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
 
         await self.hass.async_add_executor_job(_delete)
 
@@ -273,16 +291,17 @@ class MediaStore:
         """Delete orphaned media while the caller holds the media operation lock."""
         removed_counts: dict[str, int] = {}
         for record_type_id, record_type in record_types.items():
-            image_field_keys = [
-                f.key for f in record_type.fields if f.type is FieldType.IMAGE
-            ]
-            if not image_field_keys:
+            if not any(f.type is FieldType.IMAGE for f in record_type.fields):
                 continue
 
-            page = await record_storage.async_list_records(
-                record_type_id, order=RecordOrder.ASC
+            references = await record_storage.async_list_image_references(
+                record_type_id
             )
-            referenced = _referenced_filenames(page.records, image_field_keys)
+            referenced = {
+                filename
+                for _, filenames in references
+                for filename in filenames.values()
+            }
             target_dir = self._dir_for_type(record_type_id)
             removed_counts[record_type_id] = await self.hass.async_add_executor_job(
                 _remove_unreferenced_files, target_dir, referenced
@@ -343,20 +362,6 @@ class MediaStore:
             shutil.rmtree(self._dir_for_type(record_type_id), ignore_errors=True)
 
         await self.hass.async_add_executor_job(_remove)
-
-
-def _referenced_filenames(
-    records: list[dict[str, Any]], image_field_keys: list[str]
-) -> set[str]:
-    """Collect all image filenames referenced by the given records."""
-    referenced: set[str] = set()
-    for record in records:
-        data = record.get(ENVELOPE_DATA, {})
-        for field_key in image_field_keys:
-            value = data.get(field_key)
-            if isinstance(value, str) and value:
-                referenced.add(value)
-    return referenced
 
 
 async def async_resolve_image_fields(

@@ -71,6 +71,61 @@ async def test_add_list_delete_record(hass: HomeAssistant) -> None:
     assert await storage.async_delete_record("bp", "unknown-id") is False
 
 
+async def test_get_record_by_id(hass: HomeAssistant) -> None:
+    """A primary-key lookup returns the envelope, or None when absent."""
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"bp": _bp_record_type()})
+    record = await storage.async_add_record("bp", {"systolic": 120})
+    await storage.async_add_record("bp", {"systolic": 130})
+
+    assert await storage.async_get_record("bp", record["id"]) == record
+    assert await storage.async_get_record("bp", "missing") is None
+    assert await storage.async_get_record("unknown", record["id"]) is None
+
+
+async def test_list_image_references_reads_only_image_columns(
+    hass: HomeAssistant,
+) -> None:
+    """Only records with images are returned, oldest first, per image field."""
+    record_type = RecordType(
+        id="pets",
+        name="Pets",
+        fields=[
+            FieldDefinition(key="name", label="Name", type=FieldType.TEXT),
+            FieldDefinition(key="front", label="Front", type=FieldType.IMAGE),
+            FieldDefinition(key="back", label="Back", type=FieldType.IMAGE),
+        ],
+    )
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"pets": record_type, "bp": _bp_record_type()})
+    now = dt_util.utcnow()
+    newer = await storage.async_add_record(
+        "pets", {"name": "b", "back": "b.png"}, timestamp=now
+    )
+    await storage.async_add_record("pets", {"name": "no image"}, timestamp=now)
+    older = await storage.async_add_record(
+        "pets",
+        {"name": "a", "front": "a1.jpg", "back": "a2.jpg"},
+        timestamp=now - timedelta(days=1),
+    )
+
+    statements: list[str] = []
+    conn = storage._require_conn()  # noqa: SLF001
+    await storage._run(conn.set_trace_callback, statements.append)  # noqa: SLF001
+    references = await storage.async_list_image_references("pets")
+    await storage._run(conn.set_trace_callback, None)  # noqa: SLF001
+
+    assert references == [
+        (older["id"], {"front": "a1.jpg", "back": "a2.jpg"}),
+        (newer["id"], {"back": "b.png"}),
+    ]
+    assert len(statements) == 1
+    assert "SELECT *" not in statements[0]
+    assert '"name"' not in statements[0]
+    assert await storage.async_list_image_references("bp") == []
+    assert await storage.async_list_image_references("unknown") == []
+
+
 async def test_list_records_limit_sorts_desc_and_truncates(hass: HomeAssistant) -> None:
     """Limit sorts newest-first (by timestamp) and truncates to at most `limit`."""
     storage = RecordStorage(hass, "entry1")
