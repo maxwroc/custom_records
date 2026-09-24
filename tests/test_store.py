@@ -21,6 +21,7 @@ from custom_components.custom_records.csv_transfer import ImportRow
 from custom_components.custom_records.models import FieldDefinition, RecordType
 from custom_components.custom_records.sql_encoding import CompiledFilter
 from custom_components.custom_records.store import (
+    ImageReference,
     RecordStorage,
     SchemaError,
     _transaction,
@@ -116,8 +117,8 @@ async def test_list_image_references_reads_only_image_columns(
     await storage._run(conn.set_trace_callback, None)  # noqa: SLF001
 
     assert references == [
-        (older["id"], {"front": "a1.jpg", "back": "a2.jpg"}),
-        (newer["id"], {"back": "b.png"}),
+        ImageReference(older["id"], older["t"], {"front": "a1.jpg", "back": "a2.jpg"}),
+        ImageReference(newer["id"], newer["t"], {"back": "b.png"}),
     ]
     assert len(statements) == 1
     assert "SELECT *" not in statements[0]

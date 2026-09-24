@@ -93,6 +93,15 @@ class RecordsPage:
     next_position: RecordPosition | None
 
 
+@dataclass(frozen=True, slots=True)
+class ImageReference:
+    """A record's stored image filenames, keyed by image field."""
+
+    record_id: str
+    timestamp: str
+    filenames: dict[str, str]
+
+
 class SchemaError(RuntimeError):
     """Raised when a configured record type's table is missing/mismatched."""
 
@@ -783,12 +792,13 @@ class RecordStorage:
 
     async def async_list_image_references(
         self, record_type_id: str
-    ) -> list[tuple[str, dict[str, str]]]:
+    ) -> list[ImageReference]:
         """
-        Return `(record_id, {field_key: filename})` for records with images.
+        Return the stored image filenames of every record that has any.
 
-        Reads only the ID and image columns (oldest first) and skips records
-        without any stored image, so media scans avoid decoding whole rows.
+        Reads only the ID, timestamp, and image columns (oldest first) and
+        skips records without any stored image, so media scans avoid decoding
+        whole rows.
         """
         await self._wait_until_available()
         record_type = self._record_types.get(record_type_id)
@@ -804,14 +814,14 @@ class RecordStorage:
         table = quote_identifier(record_type.sql_table)
         any_image = " OR ".join(f"{col} IS NOT NULL" for col in image_cols)
         sql = (
-            f"SELECT {id_col}, {', '.join(image_cols)} FROM {table} "  # noqa: S608
+            f"SELECT {id_col}, {ts_col}, {', '.join(image_cols)} FROM {table} "  # noqa: S608
             f"WHERE {any_image} ORDER BY {ts_col} ASC, {id_col} ASC"
         )
 
         def _query() -> list[sqlite3.Row]:
             return conn.execute(sql).fetchall()
 
-        references: list[tuple[str, dict[str, str]]] = []
+        references: list[ImageReference] = []
         for row in await self._run(_query):
             filenames = {}
             for field_def in image_fields:
@@ -819,7 +829,8 @@ class RecordStorage:
                 if isinstance(value, str) and value:
                     filenames[field_def.key] = value
             if filenames:
-                references.append((row[COL_ID], filenames))
+                timestamp = from_epoch_micros(row[COL_TIMESTAMP]).isoformat()
+                references.append(ImageReference(row[COL_ID], timestamp, filenames))
         return references
 
     async def async_delete_record(self, record_type_id: str, record_id: str) -> bool:

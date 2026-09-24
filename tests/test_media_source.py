@@ -85,7 +85,7 @@ async def test_browse_record_type_lists_records_with_images(
 async def test_browse_lists_each_image_field_oldest_first(
     hass: HomeAssistant,
 ) -> None:
-    """Every stored image field becomes a leaf titled by its record id."""
+    """Every stored image field becomes a leaf titled by its record timestamp."""
     record_type = {
         **IMAGE_RECORD_TYPE,
         "fields": [
@@ -108,9 +108,9 @@ async def test_browse_lists_each_image_field_oldest_first(
     )
 
     assert [(c.identifier, c.title) for c in browse.children] == [
-        (f"pets/{older['id']}/photo", older["id"]),
-        (f"pets/{older['id']}/scan", older["id"]),
-        (f"pets/{newer['id']}/scan", newer["id"]),
+        (f"pets/{older['id']}/photo", older["t"]),
+        (f"pets/{older['id']}/scan", older["t"]),
+        (f"pets/{newer['id']}/scan", newer["t"]),
     ]
 
 

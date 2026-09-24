@@ -299,8 +299,8 @@ class MediaStore:
             )
             referenced = {
                 filename
-                for _, filenames in references
-                for filename in filenames.values()
+                for reference in references
+                for filename in reference.filenames.values()
             }
             target_dir = self._dir_for_type(record_type_id)
             removed_counts[record_type_id] = await self.hass.async_add_executor_job(

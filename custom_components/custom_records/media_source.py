@@ -151,17 +151,17 @@ class CustomRecordsMediaSource(MediaSource):
         children = [
             BrowseMediaSource(
                 domain=DOMAIN,
-                identifier=f"{record_type_id}/{record_id}/{field_key}",
+                identifier=f"{record_type_id}/{reference.record_id}/{field_key}",
                 media_class=MediaClass.IMAGE,
                 media_content_type=MediaType.IMAGE,
-                title=record_id,
+                title=reference.timestamp,
                 can_play=True,
                 can_expand=False,
             )
-            for record_id, filenames in (
+            for reference in (
                 await runtime_data.storage.async_list_image_references(record_type_id)
             )
-            for field_key in filenames
+            for field_key in reference.filenames
         ]
 
         return BrowseMediaSource(
