@@ -14,8 +14,6 @@ from homeassistant.setup import async_setup_component
 
 from custom_components.custom_records.const import (
     DOMAIN,
-    ENVELOPE_DATA,
-    ENVELOPE_ID,
     FieldType,
 )
 from custom_components.custom_records.media_store import (
@@ -251,13 +249,55 @@ async def test_resolve_image_fields_noop_without_image_fields(
     assert resolved is fields
 
 
-def test_referenced_filenames_uses_envelope_data_key() -> None:
-    """Sanity check that ENVELOPE_DATA/ENVELOPE_ID match the record envelope shape."""
-    record = {
-        ENVELOPE_ID: "abc",
-        ENVELOPE_DATA: {"photo": "x.jpg"},
-    }
-    assert record[ENVELOPE_DATA]["photo"] == "x.jpg"
+@pytest.mark.parametrize(
+    "filename",
+    ["", ".", "..", "../secrets.yaml", "a/b.jpg", "a\\b.jpg", "x..y.jpg", "a\0.jpg"],
+)
+async def test_unsafe_image_filenames_rejected(
+    hass: HomeAssistant, entry_id: str, filename: str
+) -> None:
+    """Stored values (e.g. from CSV import) never resolve or delete as paths."""
+    media_store = MediaStore(hass, entry_id)
+    with pytest.raises(ValueError, match="Invalid image filename"):
+        await media_store.async_resolve_image_path("bp", filename)
+    with pytest.raises(ValueError, match="Invalid image filename"):
+        await media_store.async_delete_image("bp", filename)
+
+
+async def test_cleanup_keeps_files_from_every_image_field(
+    hass: HomeAssistant, entry_id: str
+) -> None:
+    """Files referenced by any image field survive; rows without images are ignored."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = RecordType(
+        id="pets",
+        name="Pets",
+        fields=[
+            FieldDefinition(key="name", label="Name", type=FieldType.TEXT),
+            FieldDefinition(key="front", label="Front", type=FieldType.IMAGE),
+            FieldDefinition(key="back", label="Back", type=FieldType.IMAGE),
+        ],
+    )
+    await storage.async_load({"pets": record_type})
+    front, back, orphan = [
+        await media_store.async_store_image(
+            "pets", str(make_source_image(hass, name=name))
+        )
+        for name in ("front.jpg", "back.png", "orphan.jpg")
+    ]
+    await storage.async_add_record("pets", {"front": front})
+    await storage.async_add_record("pets", {"back": back})
+    await storage.async_add_record("pets", {"name": orphan})
+
+    removed = await media_store.async_cleanup_orphaned_media(
+        storage, {"pets": record_type}
+    )
+
+    assert removed == {"pets": 1}
+    for filename, kept in ((front, True), (back, True), (orphan, False)):
+        path = await media_store.async_resolve_image_path("pets", filename)
+        assert path.is_file() is kept
 
 
 async def test_validate_image_path_valid_file(hass: HomeAssistant) -> None:

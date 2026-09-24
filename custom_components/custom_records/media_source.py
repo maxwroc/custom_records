@@ -29,7 +29,7 @@ from homeassistant.components.media_source import (
 )
 from homeassistant.config_entries import ConfigEntryState
 
-from .const import DOMAIN, ENVELOPE_DATA, ENVELOPE_ID, FieldType, RecordOrder
+from .const import DOMAIN, ENVELOPE_DATA, FieldType
 from .media_store import MEDIA_URL_PREFIX
 
 if TYPE_CHECKING:
@@ -72,13 +72,13 @@ class CustomRecordsMediaSource(MediaSource):
             msg = "Invalid media identifier"
             raise Unresolvable(msg) from err
 
-        page = await runtime_data.storage.async_list_records(
-            record_type_id, order=RecordOrder.ASC
-        )
-        record = next(
-            (r for r in page.records if r[ENVELOPE_ID] == record_id),
-            None,
-        )
+        record_type = runtime_data.record_types.get(record_type_id)
+        field_def = record_type.get_field(field_key) if record_type else None
+        if field_def is None or field_def.type is not FieldType.IMAGE:
+            msg = f"No image field '{field_key}' for record type '{record_type_id}'"
+            raise Unresolvable(msg)
+
+        record = await runtime_data.storage.async_get_record(record_type_id, record_id)
         if record is None:
             msg = f"Record '{record_id}' not found"
             raise Unresolvable(msg)
@@ -88,9 +88,13 @@ class CustomRecordsMediaSource(MediaSource):
             msg = f"No image stored for field '{field_key}'"
             raise Unresolvable(msg)
 
-        path = await runtime_data.media_store.async_resolve_image_path(
-            record_type_id, filename
-        )
+        try:
+            path = await runtime_data.media_store.async_resolve_image_path(
+                record_type_id, filename
+            )
+        except ValueError as err:
+            msg = f"Invalid stored image for field '{field_key}'"
+            raise Unresolvable(msg) from err
         if not await self.hass.async_add_executor_job(path.is_file):
             msg = "Image file is missing on disk"
             raise Unresolvable(msg)
@@ -144,29 +148,21 @@ class CustomRecordsMediaSource(MediaSource):
             msg = f"Unknown record_type '{record_type_id}'"
             raise Unresolvable(msg)
 
-        image_field_keys = [
-            f.key for f in record_type.fields if f.type is FieldType.IMAGE
+        children = [
+            BrowseMediaSource(
+                domain=DOMAIN,
+                identifier=f"{record_type_id}/{reference.record_id}/{field_key}",
+                media_class=MediaClass.IMAGE,
+                media_content_type=MediaType.IMAGE,
+                title=reference.timestamp,
+                can_play=True,
+                can_expand=False,
+            )
+            for reference in (
+                await runtime_data.storage.async_list_image_references(record_type_id)
+            )
+            for field_key in reference.filenames
         ]
-        children = []
-        page = await runtime_data.storage.async_list_records(
-            record_type_id, order=RecordOrder.ASC
-        )
-        for record in page.records:
-            for field_key in image_field_keys:
-                value = record[ENVELOPE_DATA].get(field_key)
-                if not isinstance(value, str) or not value:
-                    continue
-                children.append(
-                    BrowseMediaSource(
-                        domain=DOMAIN,
-                        identifier=f"{record_type_id}/{record[ENVELOPE_ID]}/{field_key}",
-                        media_class=MediaClass.IMAGE,
-                        media_content_type=MediaType.IMAGE,
-                        title=record.get("t", record[ENVELOPE_ID]),
-                        can_play=True,
-                        can_expand=False,
-                    )
-                )
 
         return BrowseMediaSource(
             domain=DOMAIN,
