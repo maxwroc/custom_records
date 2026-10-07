@@ -8,3 +8,7 @@ cd "$(dirname "$0")/.."
 # before the rest of the dependencies are installed.
 python3 -m pip install --requirement requirements_common.txt
 python3 -m pip install --requirement requirements_dev.txt
+
+# HA installs runtime dependencies here; Python only adds it to sys.path
+# when the directory exists at interpreter startup.
+python3 -c 'import site; from pathlib import Path; Path(site.getusersitepackages()).mkdir(parents=True, exist_ok=True)'

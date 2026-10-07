@@ -56,6 +56,15 @@ Home Assistant instance running and already configured with the included
 [`configuration.yaml`](./config/configuration.yaml)
 file.
 
+Run `scripts/setup` to install the development dependencies, then
+`scripts/develop` to start Home Assistant at <http://localhost:8123>.
+Setup prepares Python's user package directory before startup so
+dependencies installed by Home Assistant are immediately importable.
+Rerun `scripts/setup` after changing Python versions.
+If an instance started before this fix reports missing `hass_frontend` or
+`turbojpeg` modules, stop it, run `scripts/setup`, then start it again with
+`scripts/develop`.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under its MIT License.
