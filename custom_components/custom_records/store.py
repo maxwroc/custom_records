@@ -240,24 +240,24 @@ def _ensure_table_sync(conn: sqlite3.Connection, record_type: RecordType) -> Non
     existing table is a structural mismatch (data loss risk), never silently
     patched - see plan_sql.md Phase 1 pt.6/7.
     """
-    conn.execute(_create_table_sql(record_type))
-    conn.execute(_index_sql(record_type))
-    existing = _existing_columns(conn, record_type.sql_table)
-    for field_def in record_type.fields:
-        if field_def.sql_column in existing:
-            continue
-        if field_def.required:
-            msg = (
-                f"Record type '{record_type.id}' field '{field_def.key}' is "
-                "required but missing from its existing table; only optional "
-                "fields can be added to an existing record type"
+    with _transaction(conn):
+        conn.execute(_create_table_sql(record_type))
+        conn.execute(_index_sql(record_type))
+        existing = _existing_columns(conn, record_type.sql_table)
+        for field_def in record_type.fields:
+            if field_def.sql_column in existing:
+                continue
+            if field_def.required:
+                msg = (
+                    f"Record type '{record_type.id}' field '{field_def.key}' is "
+                    "required but missing from its existing table; only optional "
+                    "fields can be added to an existing record type"
+                )
+                raise SchemaError(msg)
+            conn.execute(
+                f"ALTER TABLE {quote_identifier(record_type.sql_table)} "
+                f"ADD COLUMN {_column_ddl(field_def)}"
             )
-            raise SchemaError(msg)
-        conn.execute(
-            f"ALTER TABLE {quote_identifier(record_type.sql_table)} "
-            f"ADD COLUMN {_column_ddl(field_def)}"
-        )
-    conn.commit()
 
 
 @contextmanager

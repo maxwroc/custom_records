@@ -6,19 +6,36 @@
 
 from __future__ import annotations
 
+import json
+import re
+import sqlite3
+from contextlib import closing
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
+import pytest
+import voluptuous as vol
 from aiohttp import FormData
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
 
-from custom_components.custom_records.const import DOMAIN, SUBENTRY_TYPE_RECORD_TYPE
+from custom_components.custom_records.config_flow import (
+    FieldsDefinitionError,
+    _parse_fields_definition,
+)
+from custom_components.custom_records.const import (
+    DB_FILENAME_TEMPLATE,
+    DOMAIN,
+    SUBENTRY_TYPE_RECORD_TYPE,
+)
 
-from .conftest import BP_RECORD_TYPE, async_setup_entry_with_types
+from .conftest import BP_RECORD_TYPE, async_setup_entry_with_types, make_source_image
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
 
 
@@ -174,6 +191,423 @@ async def test_add_field_requires_options_for_select_types(hass: HomeAssistant) 
     assert result["errors"] == {"options": "options_required"}
 
 
+@pytest.mark.parametrize(
+    "definition",
+    [
+        '[{"label": "Systolic Pressure!", "type": "number", "required": true}]',
+        "- label: Systolic Pressure!\n  type: number\n  required: true",
+        '{"fields": [{"label": "Systolic Pressure!", "type": "number",'
+        ' "required": true}], "id": "ignored", "sql_table": "ignored"}',
+        "fields:\n  - label: Systolic Pressure!\n    type: number\n    required: true",
+    ],
+)
+async def test_paste_definition_creates_record_type(
+    hass: HomeAssistant, definition: str
+) -> None:
+    """Paste-only JSON/YAML submission persists and registers the same type."""
+    entry = await async_setup_entry_with_types(hass)
+    result = await _init_add_flow(hass, entry)
+    assert result["step_id"] == "user"
+    schema = result["data_schema"]
+    assert schema is not None
+    marker = next(key for key in schema.schema if key == "fields_definition")
+    assert isinstance(marker, vol.Optional)
+    assert schema.schema[marker].config["multiline"] is True
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {"name": "Blood Pressure", "fields_definition": definition},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["unique_id"] == "blood_pressure"
+    assert result["data"]["sql_table"] == "records_blood_pressure"
+    assert result["data"]["fields"] == [
+        {
+            "key": "systolic_pressure",
+            "label": "Systolic Pressure!",
+            "type": "number",
+            "required": True,
+            "unit": None,
+            "default": None,
+            "options": None,
+            "sql_column": "systolic_pressure",
+        }
+    ]
+    await hass.async_block_till_done()
+    assert list(entry.runtime_data.record_types) == ["blood_pressure"]
+    assert len(entry.subentries) == 1
+    record = await entry.runtime_data.storage.async_add_record(
+        "blood_pressure", {"systolic_pressure": 120}
+    )
+    assert record["d"] == {"systolic_pressure": 120}
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_default"),
+    [
+        ({"key": "value", "default": "hello"}, "hello"),
+        ({"key": "value", "type": "long_text", "default": "long\ntext"}, "long\ntext"),
+        ({"key": "value", "type": "number", "default": 120.5}, 120.5),
+        ({"key": "value", "type": "boolean", "default": False}, False),
+        (
+            {
+                "key": "value",
+                "type": "datetime",
+                "default": "2026-10-07T12:00:00+00:00",
+            },
+            "2026-10-07T12:00:00+00:00",
+        ),
+        (
+            {
+                "key": "value",
+                "type": "single_select",
+                "options": " happy , sad ",
+                "default": "happy",
+            },
+            "happy",
+        ),
+        (
+            {
+                "key": "value",
+                "type": "multi_select",
+                "options": [" happy ", " sad "],
+                "default": ["happy", "sad"],
+            },
+            ["happy", "sad"],
+        ),
+        (
+            {"key": "value", "type": "image", "default": "/config/photo.jpg"},
+            "/config/photo.jpg",
+        ),
+        ({"key": "value", "type": "number", "default": None}, None),
+    ],
+)
+def test_definition_field_types_and_defaults(
+    field: dict[str, Any], expected_default: Any
+) -> None:
+    """Defaults preserve their JSON-compatible values for every field type."""
+    parsed = _parse_fields_definition(json.dumps([field]))[0]
+    assert parsed.default == expected_default
+    assert parsed.label == "value"
+    assert parsed.type.value == field.get("type", "text")
+    assert parsed.required is False
+    if "options" in field:
+        assert parsed.options == ["happy", "sad"]
+
+
+def test_definition_aliases_order_and_physical_names() -> None:
+    """Generate logical keys and never import arbitrary physical SQL names."""
+    fields = _parse_fields_definition(
+        json.dumps(
+            [
+                {"name": "First field", "key": "", "sql_column": "arbitrary"},
+                {"label": "Second", "name": "Ignored", "key": "custom", "unit": "kg"},
+                {"key": "third", "unit": None},
+            ]
+        )
+    )
+    assert [field.key for field in fields] == ["first_field", "custom", "third"]
+    assert [field.label for field in fields] == ["First field", "Second", "third"]
+    assert [field.sql_column for field in fields] == ["first_field", "custom", "third"]
+    assert fields[1].unit == "kg"
+
+
+@pytest.mark.parametrize(
+    ("definition", "message"),
+    [
+        ("[", "Invalid JSON/YAML"),
+        ("hello", "nonempty field list"),
+        ("null", "nonempty field list"),
+        ("[]", "nonempty field list"),
+        ('{"fields": []}', "nonempty field list"),
+        ('{"name": "Only a name"}', "nonempty field list"),
+        ('{"fields": {}}', "nonempty field list"),
+        ("[123]", "Field 1: expected a field object"),
+        ("[{}]", "Field 1: Provide a nonempty"),
+        ('[{"key": "valid"}, {"key": "valid"}]', "Field 2 (valid): Duplicate"),
+        ('[{"label": "My Field!"}, {"label": "My Field"}]', "Duplicate field key"),
+        ("- &loop\n  key: value\n  default: *loop", "Default must be a string"),
+        ("- key: value\n  type: datetime\n  default: 2026-10-07", "quote datetime"),
+        (
+            "- key: value\n  type: datetime\n  default: 2026-10-07T12:00:00Z",
+            "quote datetime",
+        ),
+        ("!!python/object/apply:os.getcwd []", "Invalid JSON/YAML"),
+    ],
+)
+def test_definition_rejects_invalid_structure(definition: str, message: str) -> None:
+    """Invalid syntax, shapes, aliases, and duplicates produce contextual errors."""
+    with pytest.raises(FieldsDefinitionError, match=re.escape(message)):
+        _parse_fields_definition(definition)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {"key": "timestamp"},
+        {"key": "select"},
+        {"key": "Invalid"},
+        {"key": "has__double"},
+        {"key": "a" * 64},
+        {"key": ""},
+        {"key": 123},
+        {"key": None},
+        {"key": "value", "label": ""},
+        {"key": "value", "label": None},
+        {"key": "value", "name": False},
+        {"key": "value", "type": "unknown"},
+        {"key": "value", "type": 3},
+        {"key": "value", "required": "false"},
+        {"key": "value", "required": 1},
+        {"key": "value", "unit": 3},
+        {"key": "value", "require": True},
+        {"key": "value", "options": {}},
+        {"key": "value", "options": [3]},
+        {"key": "value", "type": "single_select"},
+        {"key": "value", "type": "single_select", "options": []},
+        {"key": "value", "type": "single_select", "options": " , "},
+        {"key": "value", "type": "multi_select", "options": ["a", " a "]},
+        {"key": "value", "type": "multi_select", "options": ["a", ""]},
+        {"key": "value", "type": "single_select", "options": "a, a"},
+        {"key": "value", "default": []},
+        {"key": "value", "type": "long_text", "default": {}},
+        {"key": "value", "type": "boolean", "default": "true"},
+        {"key": "value", "type": "number", "default": True},
+        {"key": "value", "type": "number", "default": "120"},
+        {"key": "value", "type": "number", "default": float("nan")},
+        {"key": "value", "type": "number", "default": float("inf")},
+        {"key": "value", "type": "number", "default": 10**400},
+        {"key": "value", "type": "datetime", "default": "not a date"},
+        {"key": "value", "type": "datetime", "default": "2026-10-07T12:00:00"},
+        {"key": "value", "type": "datetime", "default": 123},
+        {"key": "value", "type": "image", "default": {"file_id": "123"}},
+        {"key": "value", "type": "image", "default": ""},
+        {"key": "value", "type": "single_select", "options": ["a"], "default": "b"},
+        {"key": "value", "type": "single_select", "options": ["a"], "default": []},
+        {"key": "value", "type": "multi_select", "options": ["a"], "default": ["b"]},
+        {"key": "value", "type": "multi_select", "options": ["a"], "default": ["a", 1]},
+    ],
+)
+def test_definition_rejects_invalid_field(field: dict[str, Any]) -> None:
+    """Reject malformed attributes without coercing them or leaking exceptions."""
+    with pytest.raises(FieldsDefinitionError, match="Field 1"):
+        _parse_fields_definition(json.dumps([field]))
+
+
+async def test_invalid_definition_preserves_name_and_input(
+    hass: HomeAssistant,
+) -> None:
+    """An invalid later field has no side effects and allows correction."""
+    entry = await async_setup_entry_with_types(hass)
+    result = await _init_add_flow(hass, entry)
+    definition = '[{"key": "valid"}, {"key": "invalid", "type": "unknown"}]'
+    with patch.object(entry.runtime_data.storage, "async_ensure_record_type") as ensure:
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"], {"name": "Test", "fields_definition": definition}
+        )
+        ensure.assert_not_called()
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"fields_definition": "invalid_definition"}
+    assert "Field 2 (invalid)" in result["description_placeholders"]["error"]
+    schema = result["data_schema"]
+    assert schema is not None
+    marker = next(
+        key
+        for key in schema.schema
+        if isinstance(key, vol.Marker) and key == "fields_definition"
+    )
+    assert marker.description["suggested_value"] == definition
+    name_marker = next(
+        key for key in schema.schema if isinstance(key, vol.Marker) and key == "name"
+    )
+    assert name_marker.description["suggested_value"] == "Test"
+    assert not entry.subentries
+    assert not entry.runtime_data.record_types
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"name": "Test", "fields_definition": '[{"key": "valid"}]'}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert [field["key"] for field in result["data"]["fields"]] == ["valid"]
+    await hass.async_block_till_done()
+
+
+@pytest.mark.parametrize(
+    ("name", "error"),
+    [
+        ("", "name_required"),
+        (" \n ", "name_required"),
+        ("Blood Pressure", "already_exists"),
+    ],
+)
+async def test_definition_requires_valid_unique_name(
+    hass: HomeAssistant, name: str, error: str
+) -> None:
+    """A pasted definition must not bypass name validation or uniqueness."""
+    record_type = {**BP_RECORD_TYPE, "id": "blood_pressure"}
+    entry = await async_setup_entry_with_types(hass, [record_type])
+    result = await _init_add_flow(hass, entry)
+    definition = '[{"key": "value"}]'
+    with patch.object(entry.runtime_data.storage, "async_ensure_record_type") as ensure:
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"], {"name": name, "fields_definition": definition}
+        )
+        ensure.assert_not_called()
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"name": error}
+    assert len(entry.subentries) == 1
+
+
+@pytest.mark.parametrize("manual", [{"fields_definition": " \n "}, {}])
+async def test_blank_definition_continues_manual_creation(
+    hass: HomeAssistant, manual: dict[str, Any]
+) -> None:
+    """Omitted or whitespace-only definitions retain the manual field wizard."""
+    entry = await async_setup_entry_with_types(hass)
+    result = await _init_add_flow(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"name": "Test", **manual}
+    )
+    assert result["step_id"] == "add_field"
+    schema = result["data_schema"]
+    assert schema is not None
+    assert all(key != "fields_definition" for key in schema.schema)
+    label_marker = next(key for key in schema.schema if key == "label")
+    assert isinstance(label_marker, vol.Required)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"label": "", "type": "number"}
+    )
+    assert result["errors"] == {"label": "label_required"}
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {"label": "Buffered", "type": "number", "add_another": True},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"label": "Value", "type": "number"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["fields"][0]["type"] == "number"
+    assert [field["key"] for field in result["data"]["fields"]] == ["buffered", "value"]
+    await hass.async_block_till_done()
+
+
+@pytest.mark.parametrize(
+    "submission",
+    [
+        {"label": "Value", "type": "number"},
+        {"name": "Test", "fields_definition": '[{"key": "value", "type": "number"}]'},
+    ],
+)
+async def test_creation_database_failure_can_retry(
+    hass: HomeAssistant, submission: dict[str, Any]
+) -> None:
+    """A failed candidate is not appended to the buffer on resubmission."""
+    entry = await async_setup_entry_with_types(hass)
+    result = await _init_add_flow(hass, entry)
+    if "label" in submission:
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"], {"name": "Test"}
+        )
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"],
+            {"label": "Buffered", "type": "text", "add_another": True},
+        )
+    with patch.object(
+        entry.runtime_data.storage,
+        "async_ensure_record_type",
+        side_effect=sqlite3.OperationalError("test failure"),
+    ):
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"], submission
+        )
+    assert result["errors"] == {"base": "database_error"}
+    assert not entry.subentries
+    if "label" in submission:
+        assert result["step_id"] == "add_field"
+        assert result["description_placeholders"]["count"] == "1"
+    else:
+        assert result["step_id"] == "user"
+        schema = result["data_schema"]
+        assert schema is not None
+        marker = next(
+            key
+            for key in schema.schema
+            if isinstance(key, vol.Marker) and key == "fields_definition"
+        )
+        assert marker.description["suggested_value"] == submission["fields_definition"]
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], submission
+    )
+    expected_keys = ["buffered", "value"] if "label" in submission else ["value"]
+    assert [field["key"] for field in result["data"]["fields"]] == expected_keys
+    await hass.async_block_till_done()
+    assert len(entry.subentries) == 1
+
+
+async def test_creation_schema_failure_rolls_back(hass: HomeAssistant) -> None:
+    """Failure after CREATE TABLE leaves no partial schema before a corrected retry."""
+    entry = await async_setup_entry_with_types(hass)
+    result = await _init_add_flow(hass, entry)
+    with patch(
+        "custom_components.custom_records.store._index_sql", return_value="INVALID SQL"
+    ):
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"],
+            {"name": "Test", "fields_definition": '[{"key": "old"}]'},
+        )
+    assert result["errors"] == {"base": "database_error"}
+    assert not entry.subentries
+    assert not entry.runtime_data.record_types
+    tables = await hass.async_add_executor_job(_definition_tables, hass, entry.entry_id)
+    assert tables == []
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            "name": "Test",
+            "fields_definition": '[{"key": "corrected", "required": true}]',
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    assert [field.key for field in entry.runtime_data.record_types["test"].fields] == [
+        "corrected"
+    ]
+
+
+def _definition_tables(hass: HomeAssistant, entry_id: str) -> list[tuple[str]]:
+    """Inspect the test database without using storage internals."""
+    path = hass.config.path(
+        ".storage", DOMAIN, DB_FILENAME_TEMPLATE.format(entry_id=entry_id)
+    )
+    with closing(sqlite3.connect(path)) as conn:
+        return conn.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'records_test'"
+        ).fetchall()
+
+
+async def test_image_definition_default_requires_existing_path(
+    hass: HomeAssistant,
+) -> None:
+    """Image defaults use the existing path validator before schema creation."""
+    entry = await async_setup_entry_with_types(hass)
+    result = await _init_add_flow(hass, entry)
+    field = {"key": "photo", "type": "image", "default": "/outside/missing.jpg"}
+    with patch.object(entry.runtime_data.storage, "async_ensure_record_type") as ensure:
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"],
+            {"name": "Test", "fields_definition": json.dumps([field])},
+        )
+        ensure.assert_not_called()
+    assert result["errors"] == {"fields_definition": "invalid_definition"}
+    assert "Field 1 (photo)" in result["description_placeholders"]["error"]
+    field["default"] = str(make_source_image(hass))
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"name": "Test", "fields_definition": json.dumps([field])}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["fields"][0]["default"] == field["default"]
+    await hass.async_block_till_done()
+
+
 async def test_add_record_type_name_collision(hass: HomeAssistant) -> None:
     """A name that slugifies to an existing record type id is rejected."""
     entry = await async_setup_entry_with_types(hass)
@@ -224,6 +658,9 @@ async def test_reconfigure_add_field(hass: HomeAssistant) -> None:
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"], {"next_step_id": "reconfigure_add_field"}
     )
+    schema = result["data_schema"]
+    assert schema is not None
+    assert all(key != "fields_definition" for key in schema.schema)
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"],
         {

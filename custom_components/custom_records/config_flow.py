@@ -8,11 +8,13 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
+import yaml
 from homeassistant import config_entries
 from homeassistant.components.file_upload import process_uploaded_file
 from homeassistant.components.http.auth import async_sign_path
 from homeassistant.core import callback
 from homeassistant.helpers import selector
+from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
 from .const import (
@@ -28,7 +30,9 @@ from .const import (
     is_valid_record_type_id,
 )
 from .csv_transfer import parse_import_csv
+from .media_store import async_validate_image_path
 from .models import FieldDefinition, RecordType
+from .sql_encoding import is_finite_number
 from .store import SchemaError
 
 if TYPE_CHECKING:
@@ -96,26 +100,175 @@ def _read_uploaded_csv(hass: HomeAssistant, file_id: str) -> str:
         return path.read_text(encoding="utf-8")
 
 
+class FieldsDefinitionError(ValueError):
+    """Invalid pasted field definition, with user-facing context."""
+
+
+def _definition_options(raw: Any) -> list[str] | None:
+    """Normalize select options without coercing non-string values."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        options = [item.strip() for item in raw.split(",") if item.strip()]
+    elif isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        options = [item.strip() for item in raw]
+        if any(not item for item in options):
+            msg = "Options must not contain blank values"
+            raise ValueError(msg)
+    else:
+        msg = "Options must be a list of strings or a comma-separated string"
+        raise ValueError(msg)
+    if len(options) != len(set(options)):
+        msg = "Options must be unique"
+        raise ValueError(msg)
+    return options
+
+
+def _validate_definition_default(field_type: FieldType, default: Any) -> None:
+    """Check default shapes not fully enforced by the field model."""
+    if default is None or field_type is FieldType.BOOLEAN:
+        return
+    if field_type is FieldType.NUMBER:
+        if isinstance(default, bool) or not isinstance(default, (int, float)):
+            msg = "Default must be a finite number, not a boolean"
+            raise ValueError(msg)
+        try:
+            finite = is_finite_number(float(default))
+        except OverflowError as err:
+            msg = "Default must be a finite number"
+            raise ValueError(msg) from err
+        if not finite:
+            msg = "Default must be a finite number"
+            raise ValueError(msg)
+    elif field_type is FieldType.MULTI_SELECT:
+        if not isinstance(default, list) or not all(
+            isinstance(item, str) for item in default
+        ):
+            msg = "Default must be a list of option strings"
+            raise ValueError(msg)
+    else:
+        if not isinstance(default, str):
+            msg = "Default must be a string (quote datetime values in YAML)"
+            raise ValueError(msg)
+        if field_type is FieldType.DATETIME:
+            parsed = dt_util.parse_datetime(default)
+            if parsed is None or parsed.tzinfo is None:
+                msg = "Default must be a valid datetime string with a timezone"
+                raise ValueError(msg)
+        elif field_type is FieldType.IMAGE and not default.strip():
+            msg = "Default must be a nonempty image path"
+            raise ValueError(msg)
+
+
+def _definition_field(raw: dict[str, Any]) -> FieldDefinition:
+    """Validate one pasted field and reuse the authoritative model rules."""
+    supported = {
+        "key",
+        "label",
+        "name",
+        "type",
+        "required",
+        "unit",
+        "options",
+        "default",
+        "sql_column",
+    }
+    if any(not isinstance(key, str) or key not in supported for key in raw):
+        unsupported = [
+            repr(key) for key in raw if not isinstance(key, str) or key not in supported
+        ]
+        msg = f"Unsupported field property: {', '.join(unsupported)}"
+        raise ValueError(msg)
+    key = raw.get("key", "")
+    if not isinstance(key, str):
+        msg = "Key must be a string"
+        raise FieldsDefinitionError(msg)
+    key = key.strip()
+    label = raw.get("label", raw.get("name", key))
+    if not isinstance(label, str) or not label.strip():
+        msg = "Provide a nonempty label, name, or key"
+        raise ValueError(msg)
+    label = label.strip()
+    key = key or slugify(label, separator="_")
+    raw_type = raw.get("type", FieldType.TEXT.value)
+    if not isinstance(raw_type, str):
+        msg = "Type must be a supported field type string"
+        raise FieldsDefinitionError(msg)
+    field_type = FieldType(raw_type)
+    required = raw.get("required", False)
+    if not isinstance(required, bool):
+        msg = "Required must be a boolean"
+        raise FieldsDefinitionError(msg)
+    unit = raw.get("unit")
+    if unit is not None and not isinstance(unit, str):
+        msg = "Unit must be a string or null"
+        raise ValueError(msg)
+    options = _definition_options(raw.get("options"))
+    default = raw.get("default")
+    _validate_definition_default(field_type, default)
+    return FieldDefinition(
+        key=key,
+        label=label,
+        type=field_type,
+        required=required,
+        unit=unit,
+        options=options,
+        default=default,
+    )
+
+
+def _parse_fields_definition(text: str) -> list[FieldDefinition]:
+    """Parse a complete JSON/YAML field list without changing flow state."""
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as err:
+        msg = f"Invalid JSON/YAML: {err}"
+        raise FieldsDefinitionError(msg) from err
+    if isinstance(raw, dict):
+        raw = raw.get("fields")
+    if not isinstance(raw, list) or not raw:
+        msg = "Provide a nonempty field list or an object containing a fields list"
+        raise FieldsDefinitionError(msg)
+    fields: list[FieldDefinition] = []
+    keys: set[str] = set()
+    for index, item in enumerate(raw, start=1):
+        context = f"Field {index}"
+        if not isinstance(item, dict):
+            msg = f"{context}: expected a field object"
+            raise FieldsDefinitionError(msg)
+        identity = item.get("label", item.get("name", item.get("key")))
+        if isinstance(identity, str):
+            context += f" ({identity})"
+        try:
+            field = _definition_field(item)
+        except ValueError as err:
+            msg = f"{context}: {err}"
+            raise FieldsDefinitionError(msg) from err
+        if field.key in keys:
+            msg = f"{context}: Duplicate field key '{field.key}'"
+            raise FieldsDefinitionError(msg)
+        fields.append(field)
+        keys.add(field.key)
+    return fields
+
+
 def _field_schema() -> vol.Schema:
     """Build the "add a field" form schema, shared by the create/reconfigure flows."""
-    return vol.Schema(
-        {
-            vol.Required("label"): str,
-            vol.Optional("key"): str,
-            vol.Required(
-                "type", default=FieldType.NUMBER.value
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[t.value for t in FieldType],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Optional("required", default=False): bool,
-            vol.Optional("unit"): str,
-            vol.Optional("options"): str,
-            vol.Optional("add_another", default=False): bool,
-        },
-    )
+    schema = {
+        vol.Required("label"): str,
+        vol.Optional("key"): str,
+        vol.Required("type", default=FieldType.NUMBER.value): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[t.value for t in FieldType],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        ),
+        vol.Optional("required", default=False): bool,
+        vol.Optional("unit"): str,
+        vol.Optional("options"): str,
+        vol.Optional("add_another", default=False): bool,
+    }
+    return vol.Schema(schema)
 
 
 def _field_selector(fields: list[FieldDefinition]) -> selector.SelectSelector:
@@ -209,7 +362,7 @@ class RecordTypeSubentryFlow(config_entries.ConfigSubentryFlow):
     ) -> tuple[FieldDefinition | None, dict[str, str]]:
         """Validate an add-field form submission; return (field_or_None, errors)."""
         errors: dict[str, str] = {}
-        label = user_input["label"].strip()
+        label = user_input.get("label", "").strip()
         if not label:
             errors["label"] = "label_required"
 
@@ -257,8 +410,9 @@ class RecordTypeSubentryFlow(config_entries.ConfigSubentryFlow):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.SubentryFlowResult:
-        """Ask for the new record type's name."""
+        """Ask for a name and an optional complete field definition."""
         errors: dict[str, str] = {}
+        definition_error = ""
         if user_input is not None:
             name = user_input["name"].strip()
             type_id = slugify(name, separator="_")
@@ -273,12 +427,37 @@ class RecordTypeSubentryFlow(config_entries.ConfigSubentryFlow):
                 self._type_id = type_id
                 self._fields = []
                 self._field_buffer = []
-                return await self.async_step_add_field()
+                definition = user_input.get("fields_definition", "").strip()
+                if not definition:
+                    return await self.async_step_add_field()
+                try:
+                    fields = await self._async_parse_fields_definition(definition)
+                    return await self._finalize_create_record_type(fields)
+                except FieldsDefinitionError as err:
+                    errors["fields_definition"] = "invalid_definition"
+                    definition_error = str(err)
+                except sqlite3.Error, SchemaError:
+                    LOGGER.exception(
+                        "Failed to create database schema for record type %s",
+                        self._type_id,
+                    )
+                    errors["base"] = "database_error"
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({vol.Required("name"): str}),
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {
+                        vol.Required("name"): str,
+                        vol.Optional("fields_definition"): selector.TextSelector(
+                            selector.TextSelectorConfig(multiline=True)
+                        ),
+                    }
+                ),
+                user_input,
+            ),
             errors=errors,
+            description_placeholders={"error": definition_error},
         )
 
     async def async_step_add_field(
@@ -289,45 +468,58 @@ class RecordTypeSubentryFlow(config_entries.ConfigSubentryFlow):
         if user_input is not None:
             field, errors = self._parse_field_input(user_input)
             if field is not None:
-                self._field_buffer.append(field)
                 if user_input.get("add_another"):
+                    self._field_buffer.append(field)
                     return await self.async_step_add_field()
-                record_type = RecordType(
-                    id=_require_str(self._type_id),
-                    name=_require_str(self._name),
-                    fields=[*self._fields, *self._field_buffer],
-                )
                 try:
-                    await (
-                        self._get_entry().runtime_data.storage.async_ensure_record_type(
-                            record_type
-                        )
+                    return await self._finalize_create_record_type(
+                        [*self._fields, *self._field_buffer, field]
                     )
                 except sqlite3.Error, SchemaError:
                     LOGGER.exception(
                         "Failed to create database schema for record type %s",
-                        record_type.id,
+                        self._type_id,
                     )
                     errors["base"] = "database_error"
-                    return self.async_show_form(
-                        step_id="add_field",
-                        data_schema=_field_schema(),
-                        errors=errors,
-                        description_placeholders={
-                            "count": str(len(self._field_buffer))
-                        },
-                    )
-                return self.async_create_entry(
-                    title=record_type.name,
-                    data=record_type.to_subentry_data(),
-                    unique_id=record_type.id,
-                )
 
         return self.async_show_form(
             step_id="add_field",
-            data_schema=_field_schema(),
+            data_schema=self.add_suggested_values_to_schema(
+                _field_schema(), user_input
+            ),
             errors=errors,
             description_placeholders={"count": str(len(self._field_buffer))},
+        )
+
+    async def _async_parse_fields_definition(
+        self, definition: str
+    ) -> list[FieldDefinition]:
+        """Validate image paths after parsing, before any persistence."""
+        fields = _parse_fields_definition(definition)
+        for index, field in enumerate(fields, start=1):
+            if field.type is FieldType.IMAGE and field.default is not None:
+                image_error = await async_validate_image_path(self.hass, field.default)
+                if image_error is not None:
+                    msg = f"Field {index} ({field.key}): {image_error}"
+                    raise FieldsDefinitionError(msg)
+        return fields
+
+    async def _finalize_create_record_type(
+        self, fields: list[FieldDefinition]
+    ) -> config_entries.SubentryFlowResult:
+        """Persist a validated candidate without mutating the manual field buffer."""
+        record_type = RecordType(
+            id=_require_str(self._type_id),
+            name=_require_str(self._name),
+            fields=fields,
+        )
+        await self._get_entry().runtime_data.storage.async_ensure_record_type(
+            record_type
+        )
+        return self.async_create_entry(
+            title=record_type.name,
+            data=record_type.to_subentry_data(),
+            unique_id=record_type.id,
         )
 
     # -- reconfigure an existing record type -------------------------------

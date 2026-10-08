@@ -20,8 +20,10 @@
             "step": {
                 "user": {
                     "title": "New record type",
+                    "description": "Enter a name for the record type. The field definition below is optional: leave it blank to add fields manually on the next screen, or paste a JSON/YAML field list (or an object with a `fields` list) to create the type immediately. Only fields are imported, not the name or other settings.",
                     "data": {
-                        "name": "Name"
+                        "name": "Name",
+                        "fields_definition": "Field definition (JSON/YAML, optional)"
                     }
                 },
                 "add_field": {
@@ -125,7 +127,8 @@
                 "label_required": "Label is required.",
                 "confirmation_required": "You must confirm you understand the risk before proceeding.",
                 "file_not_found": "The uploaded file could not be read - please try uploading it again.",
-                "database_error": "The database schema could not be updated. Check Home Assistant logs and Repairs before trying again."
+                "database_error": "The database schema could not be updated. Check Home Assistant logs and Repairs before trying again.",
+                "invalid_definition": "Invalid field definition: {error}"
             },
             "abort": {
                 "reconfigure_successful": "Record type updated.",
