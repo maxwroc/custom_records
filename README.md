@@ -79,6 +79,26 @@ type, required?). Supported field types: `number`, `text`, `long_text`,
 `boolean`, `datetime`, `single_select`, `multi_select`, `image`. It's available
 immediately — no restart.
 
+When creating a new type, you can instead paste a **JSON or YAML field
+definition** into the **optional Field definition** box on the first screen,
+alongside the record type's name:
+
+```json
+{"fields": [
+  {"key": "systolic", "label": "Systolic", "type": "number", "required": true},
+  {"key": "diastolic", "label": "Diastolic", "type": "number", "required": true}
+]}
+```
+
+A bare field list also works. Leave the box blank to add fields manually on
+the next screen, or provide a valid definition to create the type immediately.
+The whole definition must be valid before anything is created. Only fields
+are imported, not the name or other record type settings; this option is
+not available when reconfiguring an existing type.
+Fields accept `key`, `label` (or `name`), `type` (defaults to `text`),
+`required`, `unit`, `default`, and `options` (a string list or comma-separated
+string). A missing key is generated from the label.
+
 Fields themselves can't be changed after creation, but you can later
 **reconfigure** a record type to edit a field's label and to manage a
 single/multi-select field's accepted values — adding, removing, renaming, or
