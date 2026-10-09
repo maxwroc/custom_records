@@ -48,11 +48,15 @@ def _validator_for_field(
     return simple_validators[field_def.type]
 
 
-def build_fields_schema(record_type: RecordType) -> vol.Schema:
+def build_fields_schema(
+    record_type: RecordType, *, allow_optional_null: bool = False
+) -> vol.Schema:
     """Build a voluptuous Schema validating the 'fields' dict of a record type."""
     schema_dict: dict[Any, Any] = {}
     for field_def in record_type.fields:
         validator = _validator_for_field(field_def)
+        if allow_optional_null and not field_def.required:
+            validator = vol.Any(None, validator)
         key: Any
         if field_def.required:
             key = vol.Required(field_def.key)
@@ -115,12 +119,16 @@ def validate_filter_value(field_def: FieldDefinition, raw_value: Any) -> Any:
 
 
 def validate_record_data(
-    record_type: RecordType, data: dict[str, Any]
+    record_type: RecordType,
+    data: dict[str, Any],
+    *,
+    allow_optional_null: bool = False,
 ) -> dict[str, Any]:
     """
     Validate and coerce a record's field data against its record type.
 
+    Updates may allow explicit nulls to clear optional fields without defaults.
     Raises vol.Invalid on failure.
     """
-    schema = build_fields_schema(record_type)
+    schema = build_fields_schema(record_type, allow_optional_null=allow_optional_null)
     return cast("dict[str, Any]", schema(data))

@@ -17,6 +17,7 @@ from custom_components.custom_records.const import (
     FieldType,
 )
 from custom_components.custom_records.media_store import (
+    ImageStoreError,
     MediaStore,
     async_resolve_image_fields,
     async_validate_image_path,
@@ -165,6 +166,133 @@ async def test_failed_record_insert_removes_copied_image(
         await media_store.async_add_record_with_images(
             storage,
             record_type,
+            {"photo": str(make_source_image(hass))},
+        )
+
+    media_dir = Path(hass.config.path(".storage", DOMAIN, entry_id, "media", "pets"))
+    assert await hass.async_add_executor_job(_directory_entries, media_dir) == []
+    await storage.async_close()
+
+
+async def test_update_record_retains_replaces_and_clears_image(
+    hass: HomeAssistant, entry_id: str
+) -> None:
+    """An update can retain, replace, and clear a managed image."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = RecordType(
+        id="pets",
+        name="Pets",
+        fields=[FieldDefinition(key="photo", label="Photo", type=FieldType.IMAGE)],
+    )
+    record_types = {"pets": record_type}
+    await storage.async_load(record_types)
+    original_filename = await media_store.async_store_image(
+        "pets", str(make_source_image(hass, name="original.jpg"))
+    )
+    record = await storage.async_add_record("pets", {"photo": original_filename})
+    media_source = {
+        "media_source": (
+            f"media-source://custom_records/pets/{record['id']}/photo"
+        )
+    }
+
+    retained = await media_store.async_update_record_with_images(
+        storage, record_type, record["id"], {"photo": media_source}
+    )
+    assert retained is not None
+    assert retained["d"]["photo"] == original_filename
+    original_path = await media_store.async_resolve_image_path(
+        "pets", original_filename
+    )
+    assert original_path.is_file()
+
+    replaced = await media_store.async_update_record_with_images(
+        storage,
+        record_type,
+        record["id"],
+        {"photo": str(make_source_image(hass, name="replacement.png"))},
+    )
+    assert replaced is not None
+    replacement_filename = replaced["d"]["photo"]
+    assert replacement_filename != original_filename
+    replacement_path = await media_store.async_resolve_image_path(
+        "pets", replacement_filename
+    )
+    assert replacement_path.is_file()
+    assert not original_path.exists()
+
+    cleared = await media_store.async_update_record_with_images(
+        storage, record_type, record["id"], {}
+    )
+    assert cleared is not None
+    assert cleared["d"]["photo"] is None
+    assert not replacement_path.exists()
+    await storage.async_close()
+
+
+async def test_update_record_rejects_forged_existing_image_reference(
+    hass: HomeAssistant, entry_id: str
+) -> None:
+    """Only the target record's exact public image reference can be retained."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = RecordType(
+        id="pets",
+        name="Pets",
+        fields=[FieldDefinition(key="photo", label="Photo", type=FieldType.IMAGE)],
+    )
+    record_types = {"pets": record_type}
+    await storage.async_load(record_types)
+    filename = await media_store.async_store_image(
+        "pets", str(make_source_image(hass))
+    )
+    record = await storage.async_add_record("pets", {"photo": filename})
+
+    with pytest.raises(ImageStoreError, match="Invalid existing image reference"):
+        await media_store.async_update_record_with_images(
+            storage,
+            record_type,
+            record["id"],
+            {
+                "photo": {
+                    "media_source": "media-source://custom_records/pets/other/photo"
+                }
+            },
+        )
+
+    assert (await storage.async_get_record("pets", record["id"]))["d"][
+        "photo"
+    ] == filename
+    await storage.async_close()
+
+
+async def test_failed_record_update_removes_copied_image(
+    hass: HomeAssistant, entry_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A newly copied image is removed when the database update fails."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = RecordType(
+        id="pets",
+        name="Pets",
+        fields=[FieldDefinition(key="photo", label="Photo", type=FieldType.IMAGE)],
+    )
+    record_types = {"pets": record_type}
+    await storage.async_load(record_types)
+    record = await storage.async_add_record("pets", {})
+
+    async def _fail_update(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        del _args, _kwargs
+        msg = "disk full"
+        raise sqlite3.OperationalError(msg)
+
+    monkeypatch.setattr(storage, "async_update_record", _fail_update)
+    with pytest.raises(sqlite3.OperationalError, match="disk full"):
+        await media_store.async_update_record_with_images(
+            storage,
+            record_type,
+            record["id"],
             {"photo": str(make_source_image(hass))},
         )
 

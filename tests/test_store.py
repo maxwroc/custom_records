@@ -84,6 +84,54 @@ async def test_get_record_by_id(hass: HomeAssistant) -> None:
     assert await storage.async_get_record("unknown", record["id"]) is None
 
 
+async def test_update_record_replaces_fields_and_optionally_timestamp(
+    hass: HomeAssistant,
+) -> None:
+    """Updates replace optional fields and preserve or replace the timestamp."""
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"bp": _bp_record_type()})
+    original_timestamp = dt_util.utcnow() - timedelta(days=1)
+    record = await storage.async_add_record(
+        "bp", {"systolic": 120, "i": 1}, timestamp=original_timestamp
+    )
+
+    updated = await storage.async_update_record(
+        "bp", record["id"], {"systolic": 125}
+    )
+
+    assert updated == {
+        "id": record["id"],
+        "t": original_timestamp.isoformat(),
+        "d": {"systolic": 125.0, "i": None},
+    }
+
+    replacement_timestamp = dt_util.utcnow()
+    updated = await storage.async_update_record(
+        "bp",
+        record["id"],
+        {"systolic": 130, "i": 2},
+        replacement_timestamp,
+    )
+
+    assert updated == {
+        "id": record["id"],
+        "t": replacement_timestamp.isoformat(),
+        "d": {"systolic": 130.0, "i": 2.0},
+    }
+
+
+async def test_update_missing_record_returns_none(hass: HomeAssistant) -> None:
+    """Updating an unknown record does not insert a row."""
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"bp": _bp_record_type()})
+
+    assert (
+        await storage.async_update_record("bp", "missing", {"systolic": 120})
+        is None
+    )
+    assert await storage.async_record_count("bp") == 0
+
+
 async def test_list_image_references_reads_only_image_columns(
     hass: HomeAssistant,
 ) -> None:
@@ -304,6 +352,29 @@ async def test_delete_record_fires_updated_event_only_when_removed(
     assert captured == []
 
     assert await storage.async_delete_record("bp", record["id"]) is True
+    await hass.async_block_till_done()
+    assert captured == [{ATTR_ENTRY_ID: "entry1", ATTR_RECORD_TYPE: "bp"}]
+
+
+async def test_update_record_fires_updated_event_only_when_found(
+    hass: HomeAssistant,
+) -> None:
+    """Updating fires the event only when a record was actually changed."""
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"bp": _bp_record_type()})
+    record = await storage.async_add_record("bp", {"systolic": 120})
+    captured = _capture_updated_events(hass)
+
+    assert (
+        await storage.async_update_record("bp", "missing", {"systolic": 125})
+        is None
+    )
+    await hass.async_block_till_done()
+    assert captured == []
+
+    assert await storage.async_update_record(
+        "bp", record["id"], {"systolic": 125}
+    )
     await hass.async_block_till_done()
     assert captured == [{ATTR_ENTRY_ID: "entry1", ATTR_RECORD_TYPE: "bp"}]
 

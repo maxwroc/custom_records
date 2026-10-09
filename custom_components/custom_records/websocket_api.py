@@ -1029,6 +1029,60 @@ async def handle_add_record(
 
 @websocket_command(
     {
+        vol.Required("type"): "custom_records/update_record",
+        vol.Required(ATTR_RECORD_TYPE): str,
+        vol.Required("record_id"): str,
+        vol.Required(ATTR_FIELDS): dict,
+        vol.Optional(ATTR_TIMESTAMP): str,
+    }
+)
+@async_response
+async def handle_update_record(
+    hass: HomeAssistant,
+    connection: ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Replace a record's fields and optionally its timestamp."""
+    runtime_data = _get_runtime_data(hass)
+    if runtime_data is None:
+        connection.send_error(msg["id"], "not_setup", "Custom Records is not set up")
+        return
+    record_type_id = msg[ATTR_RECORD_TYPE]
+    record_type = runtime_data.record_types.get(record_type_id)
+    if record_type is None:
+        connection.send_error(
+            msg["id"], "unknown_record_type", f"Unknown record_type '{record_type_id}'"
+        )
+        return
+    try:
+        timestamp = (
+            _parse_datetime(msg[ATTR_TIMESTAMP]) if ATTR_TIMESTAMP in msg else None
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_datetime", str(err))
+        return
+    try:
+        record = await runtime_data.media_store.async_update_record_with_images(
+            runtime_data.storage,
+            record_type,
+            msg["record_id"],
+            msg[ATTR_FIELDS],
+            timestamp,
+        )
+    except ImageStoreError as err:
+        connection.send_error(msg["id"], "invalid_image", str(err))
+        return
+    except (vol.Invalid, ValueError) as err:
+        connection.send_error(msg["id"], "invalid_fields", str(err))
+        return
+    if record is None:
+        connection.send_error(msg["id"], "not_found", "Record not found")
+        return
+    connection.send_result(msg["id"], {"record": to_public_record(record, record_type)})
+
+
+@websocket_command(
+    {
         vol.Required("type"): "custom_records/delete_record",
         vol.Required(ATTR_RECORD_TYPE): str,
         vol.Required("record_id"): str,
@@ -1091,6 +1145,7 @@ def async_setup_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, handle_histogram_records)
     websocket_api.async_register_command(hass, handle_compare_periods)
     websocket_api.async_register_command(hass, handle_add_record)
+    websocket_api.async_register_command(hass, handle_update_record)
     websocket_api.async_register_command(hass, handle_delete_record)
     websocket_api.async_register_command(hass, handle_validate_image_path)
     hass.data[_WS_REGISTERED_KEY] = True

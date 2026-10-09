@@ -2,7 +2,7 @@
  * Custom Records - Lovelace card.
  *
  * A lightweight custom card (no build step, no external dependencies) that
- * lists and adds records for a single configured record type via the
+ * lists, adds, edits, and deletes records for a single configured record type via the
  * custom_records WebSocket API.
  *
  * Card config:
@@ -13,8 +13,8 @@
  *                                  # '30m', '12h', '3d', '2w' (minutes/hours/days/weeks - show
  *                                  # everything from that far back, still capped server-side)
  *   show_add_record: true         # optional - show the "Add record" button/dialog, default true
- *   show_actions: true            # optional - show a per-row actions menu (currently just
- *     Delete, behind a confirmation) with a 3-dot trigger, default true
+ *   show_actions: true            # optional - show per-row Edit and Delete actions with a
+ *                                  # 3-dot trigger, default true
  *   columns:                      # optional - table-only column allow-list + order (add-record
  *     - systolic                  # form is unaffected and always shows every field); omit for
  *     - diastolic                 # today's default behavior (every field, record type's order)
@@ -168,6 +168,12 @@ function formatDateTime(hass, date) {
     }
 }
 
+function toDateTimeLocalValue(value) {
+    const date = new Date(value);
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+    return local.toISOString().slice(0, 19);
+}
+
 class CustomRecordsCard extends HTMLElement {
     constructor() {
         super();
@@ -177,6 +183,8 @@ class CustomRecordsCard extends HTMLElement {
         this._recordType = null;
         this._records = [];
         this._formValues = {};
+        this._editingRecord = null;
+        this._existingImageValues = {};
         this._loading = false;
         this._submitting = false;
         this._error = null;
@@ -259,6 +267,8 @@ class CustomRecordsCard extends HTMLElement {
         this._recordType = null;
         this._records = [];
         this._formValues = {};
+        this._editingRecord = null;
+        this._existingImageValues = {};
         this._loading = false;
         this._submitting = false;
         this._error = null;
@@ -534,26 +544,47 @@ class CustomRecordsCard extends HTMLElement {
             return;
         }
         const dialog = this._dialogEl;
+        if (!dialog.querySelector("form").reportValidity()) {
+            return;
+        }
         const configGeneration = this._configGeneration;
         const config = this._config;
         const recordType = this._recordType;
+        const editingRecord = this._editingRecord;
         const hass = this._hass;
         const isCurrent = () =>
             dialog === this._dialogEl && configGeneration === this._configGeneration;
         this._submitting = true;
         this._setDialogSubmitting(true);
         const fields = {};
-        for (const field of recordType.fields) {
-            if (field.type === "image") {
-                // Handled below - either an in-progress upload or a manual path,
-                // depending on which mode the field's toggle is currently on.
-                continue;
+        try {
+            for (const field of recordType.fields) {
+                if (field.type === "image") {
+                    continue;
+                }
+                const value = this._formValues[field.key];
+                if (value === undefined || value === "") {
+                    if (editingRecord && !field.required) {
+                        fields[field.key] = null;
+                    }
+                    continue;
+                }
+                if (value === null) {
+                    fields[field.key] = null;
+                } else if (field.type === "datetime") {
+                    const original = editingRecord?.[field.key];
+                    fields[field.key] = original && value === toDateTimeLocalValue(original)
+                        ? original
+                        : new Date(value).toISOString();
+                } else {
+                    fields[field.key] = field.type === "number" ? Number(value) : value;
+                }
             }
-            const value = this._formValues[field.key];
-            if (value === undefined || value === "") {
-                continue;
-            }
-            fields[field.key] = field.type === "number" ? Number(value) : value;
+        } catch (err) {
+            this._setDialogError(err.message || String(err));
+            this._submitting = false;
+            this._setDialogSubmitting(false);
+            return;
         }
 
         // Submission errors are shown INSIDE the still-open dialog (see
@@ -601,6 +632,11 @@ class CustomRecordsCard extends HTMLElement {
             }
             const path = this._formValues[field.key];
             if (!path) {
+                if (this._existingImageValues[field.key]) {
+                    fields[field.key] = this._existingImageValues[field.key];
+                } else if (editingRecord && !field.required) {
+                    fields[field.key] = null;
+                }
                 continue;
             }
             try {
@@ -633,11 +669,21 @@ class CustomRecordsCard extends HTMLElement {
             if (!isCurrent()) {
                 return;
             }
-            await hass.callWS({
-                type: "custom_records/add_record",
+            const request = {
+                type: editingRecord
+                    ? "custom_records/update_record"
+                    : "custom_records/add_record",
                 record_type: config.record_type,
                 fields,
-            });
+            };
+            if (editingRecord) {
+                request.record_id = editingRecord.id;
+                const timestampValue = dialog.querySelector("[data-record-timestamp]")?.value;
+                if (timestampValue !== toDateTimeLocalValue(editingRecord.timestamp)) {
+                    request.timestamp = new Date(timestampValue).toISOString();
+                }
+            }
+            await hass.callWS(request);
             if (!isCurrent()) {
                 return;
             }
@@ -657,23 +703,51 @@ class CustomRecordsCard extends HTMLElement {
     }
 
     /**
-     * Opens the add-record dialog, appended to document.body (NOT this
+     * Opens the add/edit record dialog, appended to document.body (NOT this
      * shadow root) so a Lovelace masonry/grid dashboard's layout can't
      * visually clip it - HA's own internal dialog manager does the same for
      * the same reason. No-op if already open or the record type hasn't
      * loaded yet.
      */
-    _openAddDialog() {
+    _openRecordDialog(record = null) {
         if (this._dialogEl || !this._recordType) {
             return;
         }
-        this._formValues = Object.fromEntries(
-            this._recordType.fields
-                .filter((field) => field.default !== null && field.default !== undefined)
-                .map((field) => [field.key, field.default]),
-        );
+        this._editingRecord = record;
+        this._existingImageValues = {};
+        this._formValues = {};
+        if (record) {
+            for (const field of this._recordType.fields) {
+                const value = record[field.key];
+                if (field.type === "image") {
+                    if (value?.media_source) {
+                        this._existingImageValues[field.key] = value;
+                    }
+                } else if (value !== undefined) {
+                    this._formValues[field.key] =
+                        field.type === "datetime" && value !== null
+                            ? toDateTimeLocalValue(value)
+                            : value;
+                }
+            }
+        } else {
+            this._formValues = Object.fromEntries(
+                this._recordType.fields
+                    .filter((field) => field.default !== null && field.default !== undefined)
+                    .map((field) => [
+                        field.key,
+                        field.type === "datetime"
+                            ? toDateTimeLocalValue(field.default)
+                            : field.default,
+                    ]),
+            );
+        }
         for (const field of this._recordType.fields) {
-            if (field.type === "boolean" && this._formValues[field.key] === undefined) {
+            if (
+                field.type === "boolean" &&
+                this._formValues[field.key] === undefined &&
+                (!record || field.required)
+            ) {
                 this._formValues[field.key] = false;
             }
         }
@@ -691,13 +765,16 @@ class CustomRecordsCard extends HTMLElement {
                 return `<div class="${wrapperClass}">${this._renderFieldInput(field)}</div>`;
             })
             .join("");
+        const timestampField = record
+            ? `<div class="field"><label for="record-timestamp">Timestamp *</label><input id="record-timestamp" type="datetime-local" step="1" data-record-timestamp value="${escapeHtml(toDateTimeLocalValue(record.timestamp))}" required /></div>`
+            : "";
 
         const dialog = document.createElement("ha-dialog");
         // NOTE: HA's current `ha-dialog` (wrapping `wa-dialog`) exposes the
         // header text via the `headerTitle` property/`header-title`
         // attribute - there is no `heading` property (that was the old
         // mwc-dialog-based API from older HA frontend versions).
-        dialog.headerTitle = this._config.title || this._recordType.name;
+        dialog.headerTitle = `${record ? "Edit" : "Add"} ${this._config.title || this._recordType.name}`;
         // Rendered into the dialog's default (light DOM) slot, so this
         // <style> block isn't shadow-DOM-encapsulated the way the rest of
         // the card is - mitigated with specific "cmc-" prefixed class names
@@ -747,17 +824,20 @@ class CustomRecordsCard extends HTMLElement {
         .cmc-image-path-input:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
         .cmc-image-remove-wrap { display: flex; align-items: stretch; }
         .cmc-image-remove-wrap[hidden] { display: none; }
+        .cmc-field-hint { grid-column: 1 / -1; margin: 0; color: var(--secondary-text-color); font-size: 0.9em; }
+        .cmc-field-hint[hidden] { display: none; }
         .cmc-dialog-error { grid-column: 1 / -1; color: var(--error-color, red); margin: 0; }
         .cmc-native-submit { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
       </style>
       <form class="cmc-add-form">
+        ${timestampField}
         ${formFields}
                 <p class="cmc-dialog-error" role="alert" aria-live="polite" hidden></p>
                 <button class="cmc-native-submit" type="submit" tabindex="-1" aria-hidden="true">Submit</button>
       </form>
             <ha-dialog-footer slot="footer">
                 <ha-button type="button" appearance="plain" slot="secondaryAction" class="cmc-cancel-btn">Cancel</ha-button>
-                <ha-button type="button" appearance="filled" slot="primaryAction" class="cmc-submit-btn">Add record</ha-button>
+                <ha-button type="button" appearance="filled" slot="primaryAction" class="cmc-submit-btn">${record ? "Save changes" : "Add record"}</ha-button>
             </ha-dialog-footer>
     `;
 
@@ -792,6 +872,10 @@ class CustomRecordsCard extends HTMLElement {
 
         this._dialogEl = dialog;
         document.body.appendChild(dialog);
+        this._recordType.fields
+            .filter((field) => field.type === "image")
+            .forEach((field) => this._updateRemoveVisibility(field));
+        form.querySelectorAll("select[data-key]").forEach((input) => this._validateSelectInput(input));
         dialog.open = true;
     }
 
@@ -807,6 +891,8 @@ class CustomRecordsCard extends HTMLElement {
         const dialog = this._dialogEl;
         this._dialogEl = null;
         this._formValues = {};
+        this._editingRecord = null;
+        this._existingImageValues = {};
         Object.values(this._imagePendingUploads).forEach((pending) => {
             URL.revokeObjectURL(pending.previewUrl);
         });
@@ -1014,6 +1100,11 @@ class CustomRecordsCard extends HTMLElement {
     _rowActions(record) {
         return [
             {
+                label: "Edit",
+                icon: "mdi:pencil",
+                handler: () => this._openRecordDialog(record),
+            },
+            {
                 label: "Delete",
                 icon: "mdi:delete",
                 danger: true,
@@ -1048,13 +1139,32 @@ class CustomRecordsCard extends HTMLElement {
             if (isCheckbox) {
                 this._formValues[key] = event.target.checked;
             } else if (isMultiSelect) {
-                this._formValues[key] = Array.from(event.target.selectedOptions).map(
-                    (option) => option.value,
-                );
+                this._formValues[key] = Array.from(event.target.selectedOptions)
+                    .map((option) => option.value)
+                    .filter((value) => value !== "");
             } else {
                 this._formValues[key] = event.target.value;
             }
+            if (event.target.tagName === "SELECT") {
+                this._validateSelectInput(event.target);
+            }
         };
+    }
+
+    _validateSelectInput(input) {
+        const unavailable = Array.from(input.selectedOptions)
+            .filter((option) => option.hasAttribute("data-historical"))
+            .map((option) => option.value);
+        const instruction = input.required
+            ? "Choose current values before saving."
+            : "Choose current values or clear the field before saving.";
+        const message = unavailable.length
+            ? `Saved values are no longer available: ${unavailable.join(", ")}. ${instruction}`
+            : "";
+        input.setCustomValidity(message);
+        const hint = this._dialogEl.querySelector(`[data-select-help-key="${input.dataset.key}"]`);
+        hint.textContent = message;
+        hint.hidden = !message;
     }
 
     /**
@@ -1133,11 +1243,21 @@ class CustomRecordsCard extends HTMLElement {
             fileInput.value = "";
         }
         if (previewEl) {
-            previewEl.hidden = true;
-            previewEl.removeAttribute("src");
+            const existingUrl = this._editingRecord
+                ? this._imageUrls[`${this._editingRecord.id}/${field.key}`]
+                : null;
+            if (this._existingImageValues[field.key] && existingUrl) {
+                previewEl.src = existingUrl;
+                previewEl.hidden = false;
+            } else {
+                previewEl.hidden = true;
+                previewEl.removeAttribute("src");
+            }
         }
         if (filenameEl) {
-            filenameEl.textContent = "No file chosen";
+            filenameEl.textContent = this._existingImageValues[field.key]
+                ? "Existing image"
+                : "No file chosen";
         }
         this._updateRemoveVisibility(field);
     }
@@ -1159,8 +1279,9 @@ class CustomRecordsCard extends HTMLElement {
         const uploadMode = dialog.querySelector(`[data-image-upload-mode-key="${field.key}"]`);
         const isUploadMode = !!uploadMode && !uploadMode.hidden;
         const hasValue = isUploadMode
-            ? !!this._imagePendingUploads[field.key]
-            : !!dialog.querySelector(`[data-image-path-mode-key="${field.key}"]`)?.value;
+            ? !!this._imagePendingUploads[field.key] || !!this._existingImageValues[field.key]
+            : !!dialog.querySelector(`[data-image-path-mode-key="${field.key}"]`)?.value ||
+                !!this._existingImageValues[field.key];
         removeWrap.hidden = !hasValue;
     }
 
@@ -1176,7 +1297,12 @@ class CustomRecordsCard extends HTMLElement {
         }
         const uploadMode = dialog.querySelector(`[data-image-upload-mode-key="${field.key}"]`);
         if (uploadMode && !uploadMode.hidden) {
+            delete this._existingImageValues[field.key];
             this._clearImageUpload(field);
+            const fileInput = dialog.querySelector(`[data-image-file-key="${field.key}"]`);
+            if (fileInput) {
+                fileInput.required = !!field.required;
+            }
             return;
         }
         const pathInput = dialog.querySelector(`[data-image-path-mode-key="${field.key}"]`);
@@ -1184,6 +1310,8 @@ class CustomRecordsCard extends HTMLElement {
             pathInput.value = "";
         }
         delete this._formValues[field.key];
+        delete this._existingImageValues[field.key];
+        pathInput.required = !!field.required;
         this._updateRemoveVisibility(field);
     }
 
@@ -1219,7 +1347,8 @@ class CustomRecordsCard extends HTMLElement {
                 if (fileInput) {
                     fileInput.required = false;
                 }
-                pathInput.required = !!field.required;
+                pathInput.required =
+                    !!field.required && !this._existingImageValues[field.key];
                 modeIcon?.setAttribute("icon", "mdi:folder-open");
                 modeBtn?.setAttribute("aria-label", "Switch to uploading a file");
                 modeBtn?.setAttribute("title", "Switch to uploading a file");
@@ -1229,7 +1358,8 @@ class CustomRecordsCard extends HTMLElement {
                 pathInput.required = false;
                 delete this._formValues[field.key];
                 if (fileInput) {
-                    fileInput.required = !!field.required;
+                    fileInput.required =
+                        !!field.required && !this._existingImageValues[field.key];
                 }
                 modeIcon?.setAttribute("icon", "mdi:upload");
                 modeBtn?.setAttribute("aria-label", "Switch to entering a file path");
@@ -1246,18 +1376,23 @@ class CustomRecordsCard extends HTMLElement {
         const value = this._formValues[field.key];
         const valueAttribute = value === undefined || value === null ? "" : ` value="${escapeHtml(value)}"`;
         if (field.type === "image") {
+            const existingUrl = this._editingRecord
+                ? this._imageUrls[`${this._editingRecord.id}/${field.key}`]
+                : null;
+            const hasExistingImage = !!this._existingImageValues[field.key];
+            const imageRequired = field.required && !hasExistingImage ? " required" : "";
             return `<label id="${inputId}-label">${label}</label>
 <div class="cmc-image-field" data-image-field-key="${field.key}">
   <div class="cmc-image-upload-block" data-image-control-key="${field.key}">
     <button type="button" class="cmc-image-mode-btn" data-image-mode-btn-key="${field.key}" aria-label="Switch to entering a file path" title="Switch to entering a file path"><ha-icon icon="mdi:upload"></ha-icon></button>
     <span class="cmc-image-upload-divider"></span>
     <span class="cmc-image-upload-mode" data-image-upload-mode-key="${field.key}">
-      <input type="file" class="cmc-image-file-input" accept="${IMAGE_UPLOAD_ACCEPT}" data-image-file-key="${field.key}"${required} aria-labelledby="${inputId}-label" />
+      <input type="file" class="cmc-image-file-input" accept="${IMAGE_UPLOAD_ACCEPT}" data-image-file-key="${field.key}"${imageRequired} aria-labelledby="${inputId}-label" />
       <button type="button" class="cmc-image-choose-btn" data-image-choose-key="${field.key}">Choose file</button>
       <span class="cmc-image-upload-divider"></span>
       <span class="cmc-image-upload-filename-wrap">
-        <img class="cmc-image-upload-preview" data-image-preview-key="${field.key}" alt="" hidden />
-        <span class="cmc-image-upload-filename" data-image-filename-key="${field.key}">No file chosen</span>
+        <img class="cmc-image-upload-preview" data-image-preview-key="${field.key}" alt=""${hasExistingImage && existingUrl ? ` src="${escapeHtml(existingUrl)}"` : " hidden"} />
+        <span class="cmc-image-upload-filename" data-image-filename-key="${field.key}">${hasExistingImage ? "Existing image" : "No file chosen"}</span>
       </span>
     </span>
     <input type="text" class="cmc-image-path-input" data-key="${field.key}" data-image-path-mode-key="${field.key}" aria-labelledby="${inputId}-label"${valueAttribute} placeholder="Full path to an existing image file under /config, e.g. /config/www/photo.jpg" hidden />
@@ -1275,17 +1410,23 @@ class CustomRecordsCard extends HTMLElement {
             return `<label><input type="checkbox" data-key="${field.key}"${value ? " checked" : ""}${field.required ? ' aria-required="true"' : ""} /> ${label}</label>`;
         }
         if (field.type === "datetime") {
-            return `<label for="${inputId}">${label}</label><input id="${inputId}" type="datetime-local" data-key="${field.key}"${valueAttribute}${required} />`;
+            return `<label for="${inputId}">${label}</label><input id="${inputId}" type="datetime-local" step="1" data-key="${field.key}"${valueAttribute}${required} />`;
         }
         if (field.type === "single_select" || field.type === "multi_select") {
-            const options = (field.options || [])
+            const configuredOptions = field.options || [];
+            const storedValues = Array.isArray(value) ? value : value == null ? [] : [value];
+            const historicalOptions = this._editingRecord
+                ? storedValues.filter((option) => !configuredOptions.includes(option))
+                : [];
+            const options = [...new Set([...configuredOptions, ...historicalOptions])]
                 .map((option) => {
                     const selected = Array.isArray(value) ? value.includes(option) : value === option;
-                    return `<option value="${escapeHtml(option)}"${selected ? " selected" : ""}>${escapeHtml(option)}</option>`;
+                    const historical = !configuredOptions.includes(option);
+                    return `<option value="${escapeHtml(option)}"${selected ? " selected" : ""}${historical ? " data-historical" : ""}>${escapeHtml(option)}${historical ? " (no longer available)" : ""}</option>`;
                 })
                 .join("");
             const multiple = field.type === "multi_select" ? "multiple" : "";
-            return `<label for="${inputId}">${label}</label><select id="${inputId}" data-key="${field.key}" ${multiple}${required}><option value=""></option>${options}</select>`;
+            return `<label for="${inputId}">${label}</label><select id="${inputId}" data-key="${field.key}" ${multiple}${required} aria-describedby="${inputId}-help"><option value=""></option>${options}</select><p id="${inputId}-help" class="cmc-field-hint" data-select-help-key="${field.key}" hidden></p>`;
         }
         const inputType = field.type === "number" ? "number" : "text";
         const step = field.type === "number" ? ` step="any"` : "";
@@ -1466,7 +1607,7 @@ class CustomRecordsCard extends HTMLElement {
 
         const openAddRecordButton = this.shadowRoot.getElementById("open-add-record");
         if (openAddRecordButton) {
-            openAddRecordButton.addEventListener("click", () => this._openAddDialog());
+            openAddRecordButton.addEventListener("click", () => this._openRecordDialog());
         }
         this.shadowRoot.querySelectorAll(".row-actions-dropdown").forEach((dropdown) => {
             dropdown.addEventListener("wa-select", (event) => {

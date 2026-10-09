@@ -37,6 +37,7 @@ if TYPE_CHECKING:
         "histogram_records",
         "compare_periods",
         "add_record",
+        "update_record",
         "delete_record",
         "validate_image_path",
     ],
@@ -69,10 +70,10 @@ async def test_list_record_types(
     assert response["result"]["record_types"][0]["id"] == "bp"
 
 
-async def test_add_list_delete_record(
+async def test_add_update_list_delete_record(
     hass: HomeAssistant, hass_ws_client: WebSocketGenerator
 ) -> None:
-    """add_record/list_records/delete_record work end-to-end."""
+    """add/update/list/delete record operations work end-to-end."""
     await async_setup_entry_with_types(hass, [BP_RECORD_TYPE])
     client = await hass_ws_client(hass)
 
@@ -89,14 +90,45 @@ async def test_add_list_delete_record(
     record_id = response["result"]["record"]["id"]
 
     await client.send_json(
-        {"id": 2, "type": "custom_records/list_records", "record_type": "bp"}
+        {
+            "id": 2,
+            "type": "custom_records/update_record",
+            "record_type": "bp",
+            "record_id": record_id,
+            "fields": {"systolic": 125},
+            "timestamp": "2025-01-02T03:04:05+00:00",
+        }
     )
     response = await client.receive_json()
-    assert len(response["result"]["records"]) == 1
+    assert response["success"]
+    assert response["result"]["record"] == {
+        "id": record_id,
+        "timestamp": "2025-01-02T03:04:05+00:00",
+        "systolic": 125.0,
+    }
 
     await client.send_json(
         {
             "id": 3,
+            "type": "custom_records/update_record",
+            "record_type": "bp",
+            "record_id": record_id,
+            "fields": {"systolic": 126},
+        }
+    )
+    response = await client.receive_json()
+    assert response["result"]["record"]["timestamp"] == "2025-01-02T03:04:05+00:00"
+
+    await client.send_json(
+        {"id": 4, "type": "custom_records/list_records", "record_type": "bp"}
+    )
+    response = await client.receive_json()
+    assert len(response["result"]["records"]) == 1
+    assert response["result"]["records"][0]["systolic"] == 126.0
+
+    await client.send_json(
+        {
+            "id": 5,
             "type": "custom_records/delete_record",
             "record_type": "bp",
             "record_id": record_id,
@@ -104,6 +136,165 @@ async def test_add_list_delete_record(
     )
     response = await client.receive_json()
     assert response["result"]["deleted"] is True
+
+
+async def test_update_record_errors(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> None:
+    """Update reports missing records and invalid fields or timestamps."""
+    await async_setup_entry_with_types(hass, [BP_RECORD_TYPE])
+    client = await hass_ws_client(hass)
+
+    await client.send_json(
+        {
+            "id": 1,
+            "type": "custom_records/update_record",
+            "record_type": "bp",
+            "record_id": "missing",
+            "fields": {"systolic": 120},
+        }
+    )
+    response = await client.receive_json()
+    assert response["error"]["code"] == "not_found"
+
+    await client.send_json(
+        {
+            "id": 2,
+            "type": "custom_records/add_record",
+            "record_type": "bp",
+            "fields": {"systolic": 120},
+        }
+    )
+    record_id = (await client.receive_json())["result"]["record"]["id"]
+
+    await client.send_json(
+        {
+            "id": 3,
+            "type": "custom_records/update_record",
+            "record_type": "bp",
+            "record_id": record_id,
+            "fields": {},
+        }
+    )
+    response = await client.receive_json()
+    assert response["error"]["code"] == "invalid_fields"
+
+    await client.send_json(
+        {
+            "id": 4,
+            "type": "custom_records/update_record",
+            "record_type": "bp",
+            "record_id": record_id,
+            "fields": {"systolic": 125},
+            "timestamp": "not-a-date",
+        }
+    )
+    response = await client.receive_json()
+    assert response["error"]["code"] == "invalid_datetime"
+
+
+@pytest.mark.parametrize(
+    ("field_type", "invalid_value"),
+    [
+        ("number", "nan"),
+        ("number", "inf"),
+        ("number", "-inf"),
+        ("datetime", "2026-10-08T12:34:56"),
+    ],
+)
+async def test_update_record_returns_invalid_fields_for_encoding_error(
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    field_type: str,
+    invalid_value: str,
+) -> None:
+    """Storage encoding errors are validation errors and leave data intact."""
+    await async_setup_entry_with_types(
+        hass,
+        [
+            {
+                "id": "review",
+                "name": "Review",
+                "fields": [{"key": "value", "label": "Value", "type": field_type}],
+            }
+        ],
+    )
+    client = await hass_ws_client(hass)
+    await client.send_json(
+        {
+            "id": 1,
+            "type": "custom_records/add_record",
+            "record_type": "review",
+            "fields": {},
+        }
+    )
+    original = (await client.receive_json())["result"]["record"]
+    await client.send_json(
+        {
+            "id": 2,
+            "type": "custom_records/update_record",
+            "record_type": "review",
+            "record_id": original["id"],
+            "fields": {"value": invalid_value},
+        }
+    )
+    response = await client.receive_json()
+    assert response["success"] is False
+    assert response["error"]["code"] == "invalid_fields"
+
+    await client.send_json(
+        {"id": 3, "type": "custom_records/list_records", "record_type": "review"}
+    )
+    response = await client.receive_json()
+    assert response["result"]["records"] == [original]
+
+
+async def test_update_record_preserves_explicit_null_with_boolean_defaults(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> None:
+    """An untouched null boolean remains null even when its type has a default."""
+    await async_setup_entry_with_types(
+        hass,
+        [
+            {
+                "id": "flags",
+                "name": "Flags",
+                "fields": [
+                    {
+                        "key": "enabled",
+                        "label": "Enabled",
+                        "type": "boolean",
+                        "default": True,
+                    }
+                ],
+            }
+        ],
+    )
+    client = await hass_ws_client(hass)
+    await client.send_json(
+        {
+            "id": 1,
+            "type": "custom_records/add_record",
+            "record_type": "flags",
+            "fields": {},
+        }
+    )
+    original = (await client.receive_json())["result"]["record"]
+    assert original["enabled"] is True
+    for message_id in (2, 3):
+        await client.send_json(
+            {
+                "id": message_id,
+                "type": "custom_records/update_record",
+                "record_type": "flags",
+                "record_id": original["id"],
+                "fields": {"enabled": None},
+            }
+        )
+        response = await client.receive_json()
+        assert response["success"]
+        assert response["result"]["record"]["enabled"] is None
+        assert response["result"]["record"]["timestamp"] == original["timestamp"]
 
 
 async def test_add_record_rejects_invalid_timestamp(
@@ -356,6 +547,55 @@ async def test_add_record_with_uploaded_file_id(
     assert response["result"]["record"]["photo"] == {
         "media_source": f"media-source://custom_records/pets/{record_id}/photo"
     }
+
+    existing_photo = response["result"]["record"]["photo"]
+    await ws_client.send_json(
+        {
+            "id": 2,
+            "type": "custom_records/update_record",
+            "record_type": "pets",
+            "record_id": record_id,
+            "fields": {"photo": existing_photo},
+        }
+    )
+    response = await ws_client.receive_json()
+    assert response["success"]
+    assert response["result"]["record"]["photo"] == existing_photo
+
+    replacement_file_id = await _upload_file(
+        http_client, b"replacement-image-bytes", "cat.jpg"
+    )
+    await ws_client.send_json(
+        {
+            "id": 3,
+            "type": "custom_records/update_record",
+            "record_type": "pets",
+            "record_id": record_id,
+            "fields": {"photo": {"file_id": replacement_file_id}},
+        }
+    )
+    response = await ws_client.receive_json()
+    assert response["success"]
+    assert response["result"]["record"]["photo"] == existing_photo
+
+    await ws_client.send_json(
+        {
+            "id": 4,
+            "type": "custom_records/update_record",
+            "record_type": "pets",
+            "record_id": record_id,
+            "fields": {
+                "photo": {
+                    "media_source": (
+                        "media-source://custom_records/pets/other-record/photo"
+                    )
+                }
+            },
+        }
+    )
+    response = await ws_client.receive_json()
+    assert response["success"] is False
+    assert response["error"]["code"] == "invalid_image"
 
 
 async def test_add_record_unknown_file_id_returns_invalid_image(

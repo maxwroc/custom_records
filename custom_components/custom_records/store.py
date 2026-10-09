@@ -790,6 +790,54 @@ class RecordStorage:
         row = await self._run(_query)
         return self._row_to_envelope(record_type, row) if row is not None else None
 
+    async def async_update_record(
+        self,
+        record_type_id: str,
+        record_id: str,
+        data: dict[str, Any],
+        timestamp: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """Replace a record's fields and optionally its timestamp."""
+        await self._wait_until_available()
+        record_type = self._record_types.get(record_type_id)
+        if record_type is None:
+            return None
+        conn = self._require_conn()
+        assignments = [
+            f"{quote_identifier(field_def.sql_column)} = ?"
+            for field_def in record_type.fields
+        ]
+        values = [
+            encode_field(field_def, data.get(field_def.key))
+            for field_def in record_type.fields
+        ]
+        if timestamp is not None:
+            assignments.append(f"{quote_identifier(COL_TIMESTAMP)} = ?")
+            values.append(to_epoch_micros(dt_util.as_utc(timestamp)))
+        values.append(record_id)
+        table = quote_identifier(record_type.sql_table)
+        id_col = quote_identifier(COL_ID)
+
+        def _update() -> sqlite3.Row | None:
+            with _transaction(conn):
+                cursor = conn.execute(
+                    f"UPDATE {table} SET {', '.join(assignments)} "  # noqa: S608
+                    f"WHERE {id_col} = ?",
+                    values,
+                )
+                if cursor.rowcount == 0:
+                    return None
+                return conn.execute(
+                    f"SELECT * FROM {table} WHERE {id_col} = ?",  # noqa: S608
+                    (record_id,),
+                ).fetchone()
+
+        row = await self._run(_update)
+        if row is None:
+            return None
+        self._fire_updated(record_type_id)
+        return self._row_to_envelope(record_type, row)
+
     async def async_list_image_references(
         self, record_type_id: str
     ) -> list[ImageReference]:

@@ -41,7 +41,7 @@ built to solve exactly that:
   several fields (e.g. systolic + diastolic + pulse) is a single record, not a
   handful of unrelated helpers that are hard to keep together and manage.
 
-This integration gives you a proper **multi-field, append-only log per record
+This integration gives you a proper **multi-field log per record
 type** — real timestamped rows with typed fields (numbers, text, booleans,
 dates, selects, even images) stored in an integration-owned SQLite database,
 all configured from the UI.
@@ -136,15 +136,9 @@ record_type: blood_pressure
 title: Blood Pressure
 ```
 
-It lists existing records and has an **Add record** button that opens a form.
-Click an image to open it with the record's formatted timestamp as its title.
-In the visual editor, choose an **Image dialog header field** or add ordered
-**Image overlay fields** with optional custom labels. In YAML, use
-`image_header_field: timestamp` (the default) or a non-image field key, and
-`image_overlay_fields: [{field: pulse, label: Pulse}]`. Empty overlay values are
-hidden; long overlays stay on one line and are truncated.
-See the [wiki](https://github.com/maxwroc/custom_records/wiki/Dashboard-card)
-for all card options (filtering, columns, read-only mode, etc.).
+Browse, add, edit, and delete records, or click an image to enlarge it.
+See the [card guide](https://github.com/maxwroc/custom_records/wiki/Dashboard-card)
+for configuration options.
 
 <!-- TODO: add a screenshot of the card at docs/images/card-example.png and reference it here, e.g.:
 ![Custom Records card](docs/images/card-example.png)
