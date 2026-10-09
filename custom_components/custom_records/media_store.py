@@ -27,7 +27,13 @@ from aiohttp import web
 from homeassistant.components.file_upload import process_uploaded_file
 from homeassistant.helpers.http import HomeAssistantView
 
-from .const import DOMAIN, FieldType
+from .const import (
+    ATTR_MEDIA_SOURCE,
+    DOMAIN,
+    ENVELOPE_DATA,
+    FieldType,
+)
+from .schema import validate_record_data
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -64,6 +70,38 @@ def _remove_unreferenced_files(target_dir: Path, referenced: set[str]) -> int:
             path.unlink()
             removed += 1
     return removed
+
+
+def _retained_image_filename(
+    record_type: RecordType,
+    record_id: str,
+    field_key: str,
+    value: Any,
+    existing_fields: dict[str, Any],
+) -> str | None:
+    """Resolve an exact public media reference to its stored filename."""
+    if not isinstance(value, dict) or ATTR_MEDIA_SOURCE not in value:
+        return None
+    expected = {
+        ATTR_MEDIA_SOURCE: (
+            f"media-source://{DOMAIN}/{record_type.id}/{record_id}/{field_key}"
+        )
+    }
+    filename = existing_fields.get(field_key)
+    if value != expected or not filename:
+        msg = f"Invalid existing image reference for '{field_key}'"
+        raise ImageStoreError(msg)
+    return filename
+
+
+def _image_filenames(record_type: RecordType, fields: dict[str, Any]) -> set[str]:
+    return {
+        filename
+        for field_def in record_type.fields
+        if field_def.type is FieldType.IMAGE
+        and isinstance(filename := fields.get(field_def.key), str)
+        and filename
+    }
 
 
 def allowed_source_roots(hass: HomeAssistant) -> list[Path]:
@@ -318,34 +356,111 @@ class MediaStore:
         """Copy image fields and insert their record as one media operation."""
         async with self._operation_lock:
             resolved = dict(fields)
-            copied_filenames: list[str] = []
+            copied_filenames = await self._async_store_image_fields(
+                record_type, resolved
+            )
             try:
-                for field_def in record_type.fields:
-                    if field_def.type is not FieldType.IMAGE:
-                        continue
-                    value = resolved.get(field_def.key)
-                    if not value:
-                        continue
-                    try:
-                        if isinstance(value, dict):
-                            filename = await self.async_store_uploaded_image(
-                                record_type.id, value["file_id"]
-                            )
-                        else:
-                            filename = await self.async_store_image(
-                                record_type.id, value
-                            )
-                    except ValueError as err:
-                        raise ImageStoreError(str(err)) from err
-                    copied_filenames.append(filename)
-                    resolved[field_def.key] = filename
                 return await record_storage.async_add_record(
                     record_type.id, resolved, timestamp
                 )
-            except BaseException:
+            except Exception:
                 for filename in copied_filenames:
                     await self.async_delete_image(record_type.id, filename)
                 raise
+
+    async def async_update_record_with_images(
+        self,
+        record_storage: RecordStorage,
+        record_type: RecordType,
+        record_id: str,
+        fields: dict[str, Any],
+        timestamp: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """Replace a record while retaining, replacing, or clearing its images."""
+        async with self._operation_lock:
+            existing = await record_storage.async_get_record(record_type.id, record_id)
+            if existing is None:
+                return None
+            resolved = dict(fields)
+            retained_image_fields: set[str] = set()
+            for field_def in record_type.fields:
+                if field_def.type is not FieldType.IMAGE:
+                    continue
+                value = resolved.get(field_def.key)
+                filename = _retained_image_filename(
+                    record_type,
+                    record_id,
+                    field_def.key,
+                    value,
+                    existing[ENVELOPE_DATA],
+                )
+                if filename is None:
+                    continue
+                resolved[field_def.key] = filename
+                retained_image_fields.add(field_def.key)
+
+            validated_fields = validate_record_data(
+                record_type, resolved, allow_optional_null=True
+            )
+            copied_filenames = await self._async_store_image_fields(
+                record_type, validated_fields, retained_image_fields
+            )
+            try:
+                updated = await record_storage.async_update_record(
+                    record_type.id, record_id, validated_fields, timestamp
+                )
+            except Exception:
+                for filename in copied_filenames:
+                    await self.async_delete_image(record_type.id, filename)
+                raise
+            if updated is None:
+                for filename in copied_filenames:
+                    await self.async_delete_image(record_type.id, filename)
+                return None
+            displaced_filenames = _image_filenames(
+                record_type, existing[ENVELOPE_DATA]
+            ) - _image_filenames(record_type, updated[ENVELOPE_DATA])
+            for filename in displaced_filenames:
+                if not await record_storage.async_is_image_referenced(
+                    record_type.id, filename
+                ):
+                    await self.async_delete_image(record_type.id, filename)
+            return updated
+
+    async def _async_store_image_fields(
+        self,
+        record_type: RecordType,
+        fields: dict[str, Any],
+        retained_image_fields: set[str] | None = None,
+    ) -> list[str]:
+        """Store new images and replace their source values in an owned field dict."""
+        copied_filenames: list[str] = []
+        try:
+            for field_def in record_type.fields:
+                if field_def.type is not FieldType.IMAGE or (
+                    retained_image_fields is not None
+                    and field_def.key in retained_image_fields
+                ):
+                    continue
+                value = fields.get(field_def.key)
+                if not value:
+                    continue
+                try:
+                    if isinstance(value, dict):
+                        filename = await self.async_store_uploaded_image(
+                            record_type.id, value["file_id"]
+                        )
+                    else:
+                        filename = await self.async_store_image(record_type.id, value)
+                except ValueError as err:
+                    raise ImageStoreError(str(err)) from err
+                copied_filenames.append(filename)
+                fields[field_def.key] = filename
+        except BaseException:
+            for filename in copied_filenames:
+                await self.async_delete_image(record_type.id, filename)
+            raise
+        return copied_filenames
 
     async def async_remove_all(self) -> None:
         """Delete the entire media directory tree for this entry (uninstall)."""
@@ -362,31 +477,6 @@ class MediaStore:
             shutil.rmtree(self._dir_for_type(record_type_id), ignore_errors=True)
 
         await self.hass.async_add_executor_job(_remove)
-
-
-async def async_resolve_image_fields(
-    media_store: MediaStore,
-    record_type: RecordType,
-    fields: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    Store any IMAGE-type field values (filesystem paths) and replace them.
-
-    Shared between services.py and websocket_api.py so both write paths apply
-    the same handling.
-    """
-    image_field_keys = {f.key for f in record_type.fields if f.type is FieldType.IMAGE}
-    if not image_field_keys:
-        return fields
-
-    resolved = dict(fields)
-    for key in image_field_keys:
-        source_path = resolved.get(key)
-        if not source_path:
-            continue
-        filename = await media_store.async_store_image(record_type.id, source_path)
-        resolved[key] = filename
-    return resolved
 
 
 async def async_validate_image_path(

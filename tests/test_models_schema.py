@@ -73,6 +73,41 @@ def test_validate_record_data_unknown_field_rejected() -> None:
         validate_record_data(_bp_record_type(required=False), {"unexpected": 1})
 
 
+def test_update_validation_allows_optional_null_without_applying_default() -> None:
+    """Explicit update nulls clear optional fields rather than apply defaults."""
+    record_type = RecordType(
+        id="flags",
+        name="Flags",
+        fields=[
+            FieldDefinition(
+                key="enabled", label="Enabled", type=FieldType.BOOLEAN, default=True
+            )
+        ],
+    )
+    assert validate_record_data(record_type, {}, allow_optional_null=True) == {
+        "enabled": True
+    }
+    assert validate_record_data(
+        record_type, {"enabled": None}, allow_optional_null=True
+    ) == {"enabled": None}
+    with pytest.raises(vol.Invalid):
+        validate_record_data(record_type, {"enabled": None})
+
+
+def test_update_validation_rejects_required_null_and_unknown_fields() -> None:
+    """Allowing optional nulls does not weaken requiredness or field keys."""
+    with pytest.raises(vol.Invalid):
+        validate_record_data(
+            _bp_record_type(), {"systolic": None}, allow_optional_null=True
+        )
+    with pytest.raises(vol.Invalid):
+        validate_record_data(
+            _bp_record_type(required=False),
+            {"unexpected": None},
+            allow_optional_null=True,
+        )
+
+
 def test_validate_record_data_single_select() -> None:
     """single_select fields only accept one of the configured options."""
     record_type = RecordType(

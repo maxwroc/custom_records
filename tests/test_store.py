@@ -10,6 +10,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from custom_components.custom_records import store
 from custom_components.custom_records.const import (
     ATTR_ENTRY_ID,
     ATTR_RECORD_TYPE,
@@ -82,6 +83,122 @@ async def test_get_record_by_id(hass: HomeAssistant) -> None:
     assert await storage.async_get_record("bp", record["id"]) == record
     assert await storage.async_get_record("bp", "missing") is None
     assert await storage.async_get_record("unknown", record["id"]) is None
+
+
+async def test_update_record_replaces_fields_and_optionally_timestamp(
+    hass: HomeAssistant,
+) -> None:
+    """Updates replace optional fields and preserve or replace the timestamp."""
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"bp": _bp_record_type()})
+    original_timestamp = dt_util.utcnow() - timedelta(days=1)
+    record = await storage.async_add_record(
+        "bp", {"systolic": 120, "i": 1}, timestamp=original_timestamp
+    )
+
+    updated = await storage.async_update_record("bp", record["id"], {"systolic": 125})
+
+    assert updated == {
+        "id": record["id"],
+        "t": original_timestamp.isoformat(),
+        "d": {"systolic": 125.0, "i": None},
+    }
+
+    replacement_timestamp = dt_util.utcnow()
+    updated = await storage.async_update_record(
+        "bp",
+        record["id"],
+        {"systolic": 130, "i": 2},
+        replacement_timestamp,
+    )
+
+    assert updated == {
+        "id": record["id"],
+        "t": replacement_timestamp.isoformat(),
+        "d": {"systolic": 130.0, "i": 2.0},
+    }
+
+
+async def test_update_missing_record_returns_none(hass: HomeAssistant) -> None:
+    """Updating an unknown record does not insert a row."""
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"bp": _bp_record_type()})
+
+    assert await storage.async_update_record("bp", "missing", {"systolic": 120}) is None
+    assert await storage.async_record_count("bp") == 0
+
+
+async def test_add_record_encodes_each_field_once(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Insert bindings and responses share a single encoding per field."""
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"bp": _bp_record_type()})
+    original_encode = store.encode_field
+    encoded_keys: list[str] = []
+
+    def _encode(field_def: FieldDefinition, value: Any) -> Any:
+        encoded_keys.append(field_def.key)
+        return original_encode(field_def, value)
+
+    monkeypatch.setattr(store, "encode_field", _encode)
+    try:
+        record = await storage.async_add_record("bp", {"systolic": "120"})
+        assert record["d"] == {"systolic": 120.0, "i": None}
+        assert encoded_keys == ["systolic", "i"]
+    finally:
+        await storage.async_close()
+
+
+async def test_update_record_returns_row_without_select(hass: HomeAssistant) -> None:
+    """An update returns its committed row without a second SQL read."""
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"bp": _bp_record_type()})
+    record = await storage.async_add_record("bp", {"systolic": 120})
+    statements: list[str] = []
+    conn = storage._require_conn()  # noqa: SLF001
+    await storage._run(conn.set_trace_callback, statements.append)  # noqa: SLF001
+    try:
+        updated = await storage.async_update_record(
+            "bp", record["id"], {"systolic": 125}
+        )
+        assert updated is not None
+        assert updated["d"] == {"systolic": 125.0, "i": None}
+        assert len(statements) == 3
+        assert statements[0] == "BEGIN IMMEDIATE"
+        assert statements[1].startswith("UPDATE ")
+        assert "RETURNING *" in statements[1]
+        assert statements[2] == "COMMIT"
+    finally:
+        await storage.async_close()
+
+
+async def test_image_reference_lookup_checks_every_image_column(
+    hass: HomeAssistant,
+) -> None:
+    """Existence checks include every image column, but never text values."""
+    record_type = RecordType(
+        id="pets",
+        name="Pets",
+        fields=[
+            FieldDefinition(key="name", label="Name", type=FieldType.TEXT),
+            FieldDefinition(key="front", label="Front", type=FieldType.IMAGE),
+            FieldDefinition(key="back", label="Back", type=FieldType.IMAGE),
+        ],
+    )
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"pets": record_type, "bp": _bp_record_type()})
+    await storage.async_add_record("pets", {"front": "front.jpg"})
+    await storage.async_add_record("pets", {"back": "back.png", "name": "text.jpg"})
+    try:
+        assert await storage.async_is_image_referenced("pets", "front.jpg")
+        assert await storage.async_is_image_referenced("pets", "back.png")
+        assert not await storage.async_is_image_referenced("pets", "text.jpg")
+        assert not await storage.async_is_image_referenced("pets", "missing.jpg")
+        assert not await storage.async_is_image_referenced("bp", "front.jpg")
+        assert not await storage.async_is_image_referenced("unknown", "front.jpg")
+    finally:
+        await storage.async_close()
 
 
 async def test_list_image_references_reads_only_image_columns(
@@ -304,6 +421,24 @@ async def test_delete_record_fires_updated_event_only_when_removed(
     assert captured == []
 
     assert await storage.async_delete_record("bp", record["id"]) is True
+    await hass.async_block_till_done()
+    assert captured == [{ATTR_ENTRY_ID: "entry1", ATTR_RECORD_TYPE: "bp"}]
+
+
+async def test_update_record_fires_updated_event_only_when_found(
+    hass: HomeAssistant,
+) -> None:
+    """Updating fires the event only when a record was actually changed."""
+    storage = RecordStorage(hass, "entry1")
+    await storage.async_load({"bp": _bp_record_type()})
+    record = await storage.async_add_record("bp", {"systolic": 120})
+    captured = _capture_updated_events(hass)
+
+    assert await storage.async_update_record("bp", "missing", {"systolic": 125}) is None
+    await hass.async_block_till_done()
+    assert captured == []
+
+    assert await storage.async_update_record("bp", record["id"], {"systolic": 125})
     await hass.async_block_till_done()
     assert captured == [{ATTR_ENTRY_ID: "entry1", ATTR_RECORD_TYPE: "bp"}]
 
