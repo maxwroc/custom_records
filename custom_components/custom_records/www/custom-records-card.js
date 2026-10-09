@@ -1429,7 +1429,7 @@ class CustomRecordsCard extends HTMLElement {
   <ha-input id="${inputId}" label="${label}" data-key="${field.key}" data-image-path-mode-key="${field.key}" data-image-filename-key="${field.key}" value="${hasExistingImage ? "Existing image" : "No file chosen"}" readonly${required}>
     <ha-icon-button slot="start" data-image-mode-btn-key="${field.key}" label="Switch to entering a file path" title="Switch to entering a file path"><ha-icon icon="mdi:upload"></ha-icon></ha-icon-button>
     <span slot="start" class="cmc-image-upload-mode" data-image-upload-mode-key="${field.key}">
-      <ha-button type="button" appearance="plain" size="small" data-image-choose-key="${field.key}">Choose file</ha-button>
+      <ha-button type="button" appearance="plain" size="s" data-image-choose-key="${field.key}">Choose file</ha-button>
     </span>
     <img class="cmc-image-upload-preview" data-image-preview-key="${field.key}" alt=""${hasExistingImage && existingUrl ? ` slot="start" src="${escapeHtml(existingUrl)}"` : " hidden"} />
     <div slot="end" data-image-remove-wrap-key="${field.key}" hidden>
