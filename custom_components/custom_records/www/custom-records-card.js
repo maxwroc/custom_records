@@ -359,6 +359,14 @@ class CustomRecordsCard extends HTMLElement {
         }, UPDATE_DEBOUNCE_MS);
     }
 
+    async _refreshData() {
+        if (this._updateDebounceTimer) {
+            clearTimeout(this._updateDebounceTimer);
+            this._updateDebounceTimer = null;
+        }
+        await this._loadData();
+    }
+
     getCardSize() {
         return 3 + Math.ceil((this._records || []).length / 2);
     }
@@ -549,62 +557,106 @@ class CustomRecordsCard extends HTMLElement {
         }
         const configGeneration = this._configGeneration;
         const config = this._config;
-        const recordType = this._recordType;
-        const editingRecord = this._editingRecord;
-        const hass = this._hass;
+        const submission = {
+            recordType: this._recordType,
+            editingRecord: this._editingRecord,
+            hass: this._hass,
+            values: { ...this._formValues },
+            existingImages: { ...this._existingImageValues },
+            pendingUploads: { ...this._imagePendingUploads },
+            timestampValue: dialog.querySelector("[data-record-timestamp]")?.value,
+        };
+        const { editingRecord, hass, timestampValue } = submission;
         const isCurrent = () =>
             dialog === this._dialogEl && configGeneration === this._configGeneration;
         this._submitting = true;
         this._setDialogSubmitting(true);
-        const fields = {};
+        this._setDialogError(null);
         try {
-            for (const field of recordType.fields) {
-                if (field.type === "image") {
-                    continue;
-                }
-                const value = this._formValues[field.key];
-                if (value === undefined || value === "") {
-                    if (editingRecord && !field.required) {
-                        fields[field.key] = null;
-                    }
-                    continue;
-                }
-                if (value === null) {
-                    fields[field.key] = null;
-                } else if (field.type === "datetime") {
-                    const original = editingRecord?.[field.key];
-                    fields[field.key] = original && value === toDateTimeLocalValue(original)
-                        ? original
-                        : new Date(value).toISOString();
-                } else {
-                    fields[field.key] = field.type === "number" ? Number(value) : value;
+            const fields = this._collectRecordFields(submission);
+            await this._prepareImageFields(submission, fields, isCurrent);
+            if (!isCurrent()) {
+                return;
+            }
+            const request = {
+                type: editingRecord
+                    ? "custom_records/update_record"
+                    : "custom_records/add_record",
+                record_type: config.record_type,
+                fields,
+            };
+            if (editingRecord) {
+                request.record_id = editingRecord.id;
+                if (timestampValue !== toDateTimeLocalValue(editingRecord.timestamp)) {
+                    request.timestamp = new Date(timestampValue).toISOString();
                 }
             }
+            await hass.callWS(request);
+            if (!isCurrent()) {
+                return;
+            }
+            this._closeDialog();
+            await this._refreshData();
         } catch (err) {
-            this._setDialogError(err.message || String(err));
-            this._submitting = false;
-            this._setDialogSubmitting(false);
-            return;
+            if (isCurrent()) {
+                this._setDialogError(err.message || String(err));
+            }
+        } finally {
+            if (isCurrent()) {
+                this._submitting = false;
+                this._setDialogSubmitting(false);
+            }
         }
+    }
 
-        // Submission errors are shown INSIDE the still-open dialog (see
-        // _setDialogError()), not via this._error/_render() - that mechanism
-        // replaces the entire card body with just an error message (see the
-        // `else if (this._error)` branch in _render()), which would be wrong
-        // now that the form lives in an always-visible dialog on top of the
-        // rest of the card, and would also lose any already-entered values in
-        // OTHER fields when the dialog gets rebuilt from scratch.
-        this._setDialogError(null);
-
+    _collectRecordFields({ recordType, editingRecord, values }) {
+        const fields = {};
         for (const field of recordType.fields) {
+            if (field.type === "image") {
+                continue;
+            }
+            const value = values[field.key];
+            if (value === undefined || value === "") {
+                if (editingRecord && !field.required) {
+                    fields[field.key] = null;
+                }
+                continue;
+            }
+            if (value === null) {
+                fields[field.key] = null;
+            } else if (field.type === "datetime") {
+                const original = editingRecord?.[field.key];
+                fields[field.key] = original && value === toDateTimeLocalValue(original)
+                    ? original
+                    : new Date(value).toISOString();
+            } else {
+                fields[field.key] = field.type === "number" ? Number(value) : value;
+            }
+        }
+        return fields;
+    }
+
+    async _prepareImageFields(submission, fields, isCurrent) {
+        const { recordType, editingRecord, hass, values, pendingUploads, existingImages } = submission;
+        for (const field of recordType.fields) {
+            if (!isCurrent()) {
+                return;
+            }
             if (field.type !== "image") {
                 continue;
             }
-            const pending = this._imagePendingUploads[field.key];
-            if (pending) {
-                // Upload happens HERE, at submit time (not on file selection) -
-                // see _handleImageFileChange()/plan notes.
-                try {
+            const pending = pendingUploads[field.key];
+            const path = values[field.key];
+            if (!pending && !path) {
+                if (existingImages[field.key]) {
+                    fields[field.key] = existingImages[field.key];
+                } else if (editingRecord && !field.required) {
+                    fields[field.key] = null;
+                }
+                continue;
+            }
+            try {
+                if (pending) {
                     const formData = new FormData();
                     formData.append("file", pending.file);
                     const response = await hass.fetchWithAuth("/api/file_upload", {
@@ -618,86 +670,25 @@ class CustomRecordsCard extends HTMLElement {
                         throw new Error(`Upload failed (HTTP ${response.status})`);
                     }
                     const uploadResult = await response.json();
-                    fields[field.key] = { file_id: uploadResult.file_id };
-                } catch (err) {
                     if (!isCurrent()) {
                         return;
                     }
-                    this._setDialogError(`${field.label}: ${err.message || String(err)}`);
-                    this._submitting = false;
-                    this._setDialogSubmitting(false);
-                    return;
+                    fields[field.key] = { file_id: uploadResult.file_id };
+                } else {
+                    const result = await hass.callWS({
+                        type: "custom_records/validate_image_path",
+                        path,
+                    });
+                    if (!isCurrent()) {
+                        return;
+                    }
+                    if (!result.valid) {
+                        throw new Error(result.error);
+                    }
+                    fields[field.key] = path;
                 }
-                continue;
-            }
-            const path = this._formValues[field.key];
-            if (!path) {
-                if (this._existingImageValues[field.key]) {
-                    fields[field.key] = this._existingImageValues[field.key];
-                } else if (editingRecord && !field.required) {
-                    fields[field.key] = null;
-                }
-                continue;
-            }
-            try {
-                const result = await hass.callWS({
-                    type: "custom_records/validate_image_path",
-                    path,
-                });
-                if (!isCurrent()) {
-                    return;
-                }
-                if (!result.valid) {
-                    this._setDialogError(`${field.label}: ${result.error}`);
-                    this._submitting = false;
-                    this._setDialogSubmitting(false);
-                    return;
-                }
-                fields[field.key] = path;
             } catch (err) {
-                if (!isCurrent()) {
-                    return;
-                }
-                this._setDialogError(err.message || String(err));
-                this._submitting = false;
-                this._setDialogSubmitting(false);
-                return;
-            }
-        }
-
-        try {
-            if (!isCurrent()) {
-                return;
-            }
-            const request = {
-                type: editingRecord
-                    ? "custom_records/update_record"
-                    : "custom_records/add_record",
-                record_type: config.record_type,
-                fields,
-            };
-            if (editingRecord) {
-                request.record_id = editingRecord.id;
-                const timestampValue = dialog.querySelector("[data-record-timestamp]")?.value;
-                if (timestampValue !== toDateTimeLocalValue(editingRecord.timestamp)) {
-                    request.timestamp = new Date(timestampValue).toISOString();
-                }
-            }
-            await hass.callWS(request);
-            if (!isCurrent()) {
-                return;
-            }
-            this._formValues = {};
-            this._closeDialog();
-            await this._loadData();
-        } catch (err) {
-            if (isCurrent()) {
-                this._setDialogError(err.message || String(err));
-            }
-        } finally {
-            if (isCurrent()) {
-                this._submitting = false;
-                this._setDialogSubmitting(false);
+                throw new Error(`${field.label}: ${err.message || String(err)}`);
             }
         }
     }
@@ -1090,7 +1081,7 @@ class CustomRecordsCard extends HTMLElement {
 
     /**
      * Per-row overflow-menu actions (rendered behind the 3-dot trigger in
-     * _render()). Currently just "Delete", but returned as a list so more
+     * _render()). Returned as a list so more
      * row actions can be added later without reworking the menu markup or
      * its wiring - each entry just needs a label, mdi icon name (e.g.
      * "mdi:delete", resolved at runtime by `<ha-icon>` - no need to bundle
@@ -1125,7 +1116,7 @@ class CustomRecordsCard extends HTMLElement {
                         record_type: this._config.record_type,
                         record_id: recordId,
                     });
-                    await this._loadData();
+                    await this._refreshData();
                 } catch (err) {
                     this._error = err.message || String(err);
                     this._render();

@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -19,7 +20,6 @@ from custom_components.custom_records.const import (
 from custom_components.custom_records.media_store import (
     ImageStoreError,
     MediaStore,
-    async_resolve_image_fields,
     async_validate_image_path,
 )
 from custom_components.custom_records.models import FieldDefinition, RecordType
@@ -40,6 +40,18 @@ def _missing_path(hass: HomeAssistant) -> Path:
 def _directory_entries(path: Path) -> list[Path]:
     """List directory entries outside the event loop."""
     return list(path.iterdir())
+
+
+def _image_record_type() -> RecordType:
+    return RecordType(
+        id="pets",
+        name="Pets",
+        fields=[
+            FieldDefinition(key="front", label="Front", type=FieldType.IMAGE),
+            FieldDefinition(key="back", label="Back", type=FieldType.IMAGE),
+            FieldDefinition(key="note", label="Note", type=FieldType.TEXT),
+        ],
+    )
 
 
 @pytest.fixture
@@ -261,9 +273,9 @@ async def test_update_record_rejects_forged_existing_image_reference(
             },
         )
 
-    assert (await storage.async_get_record("pets", record["id"]))["d"][
-        "photo"
-    ] == filename
+    unchanged = await storage.async_get_record("pets", record["id"])
+    assert unchanged is not None
+    assert unchanged["d"]["photo"] == filename
     await storage.async_close()
 
 
@@ -301,6 +313,219 @@ async def test_failed_record_update_removes_copied_image(
     await storage.async_close()
 
 
+async def test_unchanged_images_skip_all_cleanup_work(
+    hass: HomeAssistant, entry_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A text edit retaining its image does not query references or sweep files."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = _image_record_type()
+    await storage.async_load({"pets": record_type})
+    record = await media_store.async_add_record_with_images(
+        storage, record_type, {"front": str(make_source_image(hass)), "note": "old"}
+    )
+    orphan = await media_store.async_store_image(
+        "pets", str(make_source_image(hass, name="orphan.png"))
+    )
+    reference_lookup = AsyncMock(side_effect=AssertionError("Unexpected lookup"))
+    full_scan = AsyncMock(side_effect=AssertionError("Unexpected full scan"))
+    directory_sweep = AsyncMock(side_effect=AssertionError("Unexpected sweep"))
+    monkeypatch.setattr(storage, "async_is_image_referenced", reference_lookup)
+    monkeypatch.setattr(storage, "async_list_image_references", full_scan)
+    monkeypatch.setattr(media_store, "_async_cleanup_orphaned_media", directory_sweep)
+    try:
+        updated = await media_store.async_update_record_with_images(
+            storage,
+            record_type,
+            record["id"],
+            {
+                "front": {
+                    "media_source": (
+                        f"media-source://custom_records/pets/{record['id']}/front"
+                    )
+                },
+                "note": "new",
+            },
+        )
+        assert updated is not None
+        assert updated["d"]["front"] == record["d"]["front"]
+        assert updated["d"]["note"] == "new"
+        reference_lookup.assert_not_awaited()
+        full_scan.assert_not_awaited()
+        directory_sweep.assert_not_awaited()
+        orphan_path = await media_store.async_resolve_image_path("pets", orphan)
+        assert orphan_path.is_file()
+    finally:
+        await storage.async_close()
+
+
+@pytest.mark.parametrize("shared_field", ["front", "back"])
+async def test_targeted_cleanup_preserves_images_shared_by_other_records(
+    hass: HomeAssistant, entry_id: str, shared_field: str
+) -> None:
+    """Clearing an image never removes another record's reference in any column."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = _image_record_type()
+    await storage.async_load({"pets": record_type})
+    record = await media_store.async_add_record_with_images(
+        storage, record_type, {"front": str(make_source_image(hass))}
+    )
+    filename = record["d"]["front"]
+    await storage.async_add_record("pets", {shared_field: filename})
+    try:
+        updated = await media_store.async_update_record_with_images(
+            storage, record_type, record["id"], {}
+        )
+        assert updated is not None
+        assert updated["d"]["front"] is None
+        image_path = await media_store.async_resolve_image_path("pets", filename)
+        assert image_path.is_file()
+    finally:
+        await storage.async_close()
+
+
+async def test_targeted_cleanup_preserves_image_retained_in_another_field(
+    hass: HomeAssistant, entry_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A filename still used by the edited row is not a cleanup candidate."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = _image_record_type()
+    await storage.async_load({"pets": record_type})
+    filename = await media_store.async_store_image(
+        "pets", str(make_source_image(hass))
+    )
+    record = await storage.async_add_record(
+        "pets", {"front": filename, "back": filename}
+    )
+    reference_lookup = AsyncMock(side_effect=AssertionError("Unexpected lookup"))
+    monkeypatch.setattr(storage, "async_is_image_referenced", reference_lookup)
+    try:
+        updated = await media_store.async_update_record_with_images(
+            storage,
+            record_type,
+            record["id"],
+            {
+                "back": {
+                    "media_source": (
+                        f"media-source://custom_records/pets/{record['id']}/back"
+                    )
+                }
+            },
+        )
+        assert updated is not None
+        assert updated["d"] == {"front": None, "back": filename, "note": None}
+        reference_lookup.assert_not_awaited()
+        image_path = await media_store.async_resolve_image_path("pets", filename)
+        assert image_path.is_file()
+    finally:
+        await storage.async_close()
+
+
+@pytest.mark.parametrize("operation", ["add", "update"])
+async def test_partial_image_copy_failure_rolls_back_only_new_files(
+    hass: HomeAssistant, entry_id: str, operation: str
+) -> None:
+    """Both writers remove partial staging copies without touching old images."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = _image_record_type()
+    await storage.async_load({"pets": record_type})
+    original = await media_store.async_add_record_with_images(
+        storage, record_type, {"front": str(make_source_image(hass))}
+    )
+    original_path = await media_store.async_resolve_image_path(
+        "pets", original["d"]["front"]
+    )
+    fields = {
+        "front": str(make_source_image(hass, name="replacement.png")),
+        "back": str(_missing_path(hass)),
+    }
+    try:
+        write = (
+            media_store.async_add_record_with_images(storage, record_type, fields)
+            if operation == "add"
+            else media_store.async_update_record_with_images(
+                storage, record_type, original["id"], fields
+            )
+        )
+        with pytest.raises(ImageStoreError, match="not a file"):
+            await write
+        assert await storage.async_get_record("pets", original["id"]) == original
+        assert await storage.async_record_count("pets") == 1
+        assert await hass.async_add_executor_job(
+            _directory_entries, original_path.parent
+        ) == [original_path]
+    finally:
+        await storage.async_close()
+
+
+async def test_cleanup_failure_does_not_roll_back_committed_image(
+    hass: HomeAssistant, entry_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Post-commit cleanup errors propagate without deleting the new image."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = _image_record_type()
+    await storage.async_load({"pets": record_type})
+    original = await media_store.async_add_record_with_images(
+        storage, record_type, {"front": str(make_source_image(hass))}
+    )
+    monkeypatch.setattr(
+        storage,
+        "async_is_image_referenced",
+        AsyncMock(side_effect=sqlite3.OperationalError("cleanup failed")),
+    )
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="cleanup failed"):
+            await media_store.async_update_record_with_images(
+                storage,
+                record_type,
+                original["id"],
+                {"front": str(make_source_image(hass, name="new.png"))},
+            )
+        committed = await storage.async_get_record("pets", original["id"])
+        assert committed is not None
+        assert committed["d"]["front"] != original["d"]["front"]
+        new_path = await media_store.async_resolve_image_path(
+            "pets", committed["d"]["front"]
+        )
+        assert new_path.is_file()
+    finally:
+        await storage.async_close()
+
+
+async def test_missing_update_removes_staged_images(
+    hass: HomeAssistant, entry_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A record disappearing before persistence does not leave staged files."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = _image_record_type()
+    await storage.async_load({"pets": record_type})
+    original = await media_store.async_add_record_with_images(
+        storage, record_type, {"front": str(make_source_image(hass))}
+    )
+    original_path = await media_store.async_resolve_image_path(
+        "pets", original["d"]["front"]
+    )
+    monkeypatch.setattr(storage, "async_update_record", AsyncMock(return_value=None))
+    try:
+        updated = await media_store.async_update_record_with_images(
+            storage,
+            record_type,
+            original["id"],
+            {"front": str(make_source_image(hass, name="new.png"))},
+        )
+        assert updated is None
+        assert await hass.async_add_executor_job(
+            _directory_entries, original_path.parent
+        ) == [original_path]
+    finally:
+        await storage.async_close()
+
+
 async def test_async_remove_all_deletes_entry_media_dir(
     hass: HomeAssistant, entry_id: str
 ) -> None:
@@ -335,10 +560,10 @@ async def test_async_remove_record_type_media_deletes_only_that_type(
     assert pets_path.is_file()
 
 
-async def test_resolve_image_fields_replaces_path_with_reference(
+async def test_add_record_with_images_replaces_path_with_reference(
     hass: HomeAssistant, entry_id: str
 ) -> None:
-    """async_resolve_image_fields turns a filesystem path into a stored filename."""
+    """The production add path resolves image fields into stored filenames."""
     media_store = MediaStore(hass, entry_id)
     record_type = RecordType(
         id="bp",
@@ -349,20 +574,23 @@ async def test_resolve_image_fields_replaces_path_with_reference(
         ],
     )
     source = make_source_image(hass)
+    storage = RecordStorage(hass, entry_id)
+    await storage.async_load({"bp": record_type})
+    try:
+        record = await media_store.async_add_record_with_images(
+            storage, record_type, {"systolic": 120, "photo": str(source)}
+        )
+        assert record["d"]["systolic"] == 120
+        assert record["d"]["photo"].endswith(".jpg")
+        assert await storage.async_get_record("bp", record["id"]) == record
+    finally:
+        await storage.async_close()
 
-    resolved = await async_resolve_image_fields(
-        media_store, record_type, {"systolic": 120, "photo": str(source)}
-    )
 
-    assert resolved["systolic"] == 120
-    assert isinstance(resolved["photo"], str)
-    assert resolved["photo"].endswith(".jpg")
-
-
-async def test_resolve_image_fields_noop_without_image_fields(
+async def test_add_record_without_image_fields(
     hass: HomeAssistant, entry_id: str
 ) -> None:
-    """Record types with no IMAGE field pass fields through unchanged."""
+    """The shared staging path also supports record types without images."""
     media_store = MediaStore(hass, entry_id)
     record_type = RecordType(
         id="bp",
@@ -373,8 +601,16 @@ async def test_resolve_image_fields_noop_without_image_fields(
     )
 
     fields = {"systolic": 120}
-    resolved = await async_resolve_image_fields(media_store, record_type, fields)
-    assert resolved is fields
+    storage = RecordStorage(hass, entry_id)
+    await storage.async_load({"bp": record_type})
+    try:
+        record = await media_store.async_add_record_with_images(
+            storage, record_type, fields
+        )
+        assert record["d"] == fields
+        assert fields == {"systolic": 120}
+    finally:
+        await storage.async_close()
 
 
 @pytest.mark.parametrize(

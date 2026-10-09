@@ -680,6 +680,10 @@ class RecordStorage:
         record_id = str(uuid4())
         ts = dt_util.as_utc(timestamp) if timestamp is not None else dt_util.utcnow()
         ts_micros = to_epoch_micros(ts)
+        encoded_data = {
+            field_def.key: encode_field(field_def, data.get(field_def.key))
+            for field_def in record_type.fields
+        }
 
         columns = [COL_ID, COL_TIMESTAMP]
         values: list[Any] = [record_id, ts_micros]
@@ -687,7 +691,7 @@ class RecordStorage:
             if field_def.key not in data:
                 continue
             columns.append(field_def.sql_column)
-            values.append(encode_field(field_def, data[field_def.key]))
+            values.append(encoded_data[field_def.key])
 
         def _insert() -> None:
             col_sql = ", ".join(quote_identifier(c) for c in columns)
@@ -702,9 +706,7 @@ class RecordStorage:
         await self._run(_insert)
         self._fire_updated(record_type_id)
         stored_data = {
-            field_def.key: decode_field(
-                field_def, encode_field(field_def, data.get(field_def.key))
-            )
+            field_def.key: decode_field(field_def, encoded_data[field_def.key])
             for field_def in record_type.fields
         }
         return {
@@ -820,23 +822,44 @@ class RecordStorage:
 
         def _update() -> sqlite3.Row | None:
             with _transaction(conn):
-                cursor = conn.execute(
+                rows = conn.execute(
                     f"UPDATE {table} SET {', '.join(assignments)} "  # noqa: S608
-                    f"WHERE {id_col} = ?",
+                    f"WHERE {id_col} = ? RETURNING *",
                     values,
-                )
-                if cursor.rowcount == 0:
-                    return None
-                return conn.execute(
-                    f"SELECT * FROM {table} WHERE {id_col} = ?",  # noqa: S608
-                    (record_id,),
-                ).fetchone()
+                ).fetchall()
+            return rows[0] if rows else None
 
         row = await self._run(_update)
         if row is None:
             return None
         self._fire_updated(record_type_id)
         return self._row_to_envelope(record_type, row)
+
+    async def async_is_image_referenced(
+        self, record_type_id: str, filename: str
+    ) -> bool:
+        """Check all image columns for a filename without loading reference rows."""
+        await self._wait_until_available()
+        record_type = self._record_types.get(record_type_id)
+        if record_type is None:
+            return False
+        image_columns = [
+            quote_identifier(field_def.sql_column)
+            for field_def in record_type.fields
+            if field_def.type is FieldType.IMAGE
+        ]
+        if not image_columns:
+            return False
+        conn = self._require_conn()
+        table = quote_identifier(record_type.sql_table)
+        conditions = " OR ".join(f"{column} = ?" for column in image_columns)
+        sql = f"SELECT 1 FROM {table} WHERE {conditions} LIMIT 1"  # noqa: S608
+
+        def _query() -> bool:
+            row = conn.execute(sql, [filename] * len(image_columns)).fetchone()
+            return row is not None
+
+        return await self._run(_query)
 
     async def async_list_image_references(
         self, record_type_id: str
