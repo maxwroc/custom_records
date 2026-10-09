@@ -96,9 +96,7 @@ async def test_update_record_replaces_fields_and_optionally_timestamp(
         "bp", {"systolic": 120, "i": 1}, timestamp=original_timestamp
     )
 
-    updated = await storage.async_update_record(
-        "bp", record["id"], {"systolic": 125}
-    )
+    updated = await storage.async_update_record("bp", record["id"], {"systolic": 125})
 
     assert updated == {
         "id": record["id"],
@@ -126,10 +124,7 @@ async def test_update_missing_record_returns_none(hass: HomeAssistant) -> None:
     storage = RecordStorage(hass, "entry1")
     await storage.async_load({"bp": _bp_record_type()})
 
-    assert (
-        await storage.async_update_record("bp", "missing", {"systolic": 120})
-        is None
-    )
+    assert await storage.async_update_record("bp", "missing", {"systolic": 120}) is None
     assert await storage.async_record_count("bp") == 0
 
 
@@ -439,16 +434,11 @@ async def test_update_record_fires_updated_event_only_when_found(
     record = await storage.async_add_record("bp", {"systolic": 120})
     captured = _capture_updated_events(hass)
 
-    assert (
-        await storage.async_update_record("bp", "missing", {"systolic": 125})
-        is None
-    )
+    assert await storage.async_update_record("bp", "missing", {"systolic": 125}) is None
     await hass.async_block_till_done()
     assert captured == []
 
-    assert await storage.async_update_record(
-        "bp", record["id"], {"systolic": 125}
-    )
+    assert await storage.async_update_record("bp", record["id"], {"systolic": 125})
     await hass.async_block_till_done()
     assert captured == [{ATTR_ENTRY_ID: "entry1", ATTR_RECORD_TYPE: "bp"}]
 

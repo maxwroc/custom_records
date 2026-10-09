@@ -437,12 +437,9 @@ class MediaStore:
         copied_filenames: list[str] = []
         try:
             for field_def in record_type.fields:
-                if (
-                    field_def.type is not FieldType.IMAGE
-                    or (
-                        retained_image_fields is not None
-                        and field_def.key in retained_image_fields
-                    )
+                if field_def.type is not FieldType.IMAGE or (
+                    retained_image_fields is not None
+                    and field_def.key in retained_image_fields
                 ):
                     continue
                 value = fields.get(field_def.key)
@@ -454,9 +451,7 @@ class MediaStore:
                             record_type.id, value["file_id"]
                         )
                     else:
-                        filename = await self.async_store_image(
-                            record_type.id, value
-                        )
+                        filename = await self.async_store_image(record_type.id, value)
                 except ValueError as err:
                     raise ImageStoreError(str(err)) from err
                 copied_filenames.append(filename)

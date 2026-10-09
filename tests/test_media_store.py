@@ -204,9 +204,7 @@ async def test_update_record_retains_replaces_and_clears_image(
     )
     record = await storage.async_add_record("pets", {"photo": original_filename})
     media_source = {
-        "media_source": (
-            f"media-source://custom_records/pets/{record['id']}/photo"
-        )
+        "media_source": (f"media-source://custom_records/pets/{record['id']}/photo")
     }
 
     retained = await media_store.async_update_record_with_images(
@@ -256,9 +254,7 @@ async def test_update_record_rejects_forged_existing_image_reference(
     )
     record_types = {"pets": record_type}
     await storage.async_load(record_types)
-    filename = await media_store.async_store_image(
-        "pets", str(make_source_image(hass))
-    )
+    filename = await media_store.async_store_image("pets", str(make_source_image(hass)))
     record = await storage.async_add_record("pets", {"photo": filename})
 
     with pytest.raises(ImageStoreError, match="Invalid existing image reference"):
@@ -393,9 +389,7 @@ async def test_targeted_cleanup_preserves_image_retained_in_another_field(
     storage = RecordStorage(hass, entry_id)
     record_type = _image_record_type()
     await storage.async_load({"pets": record_type})
-    filename = await media_store.async_store_image(
-        "pets", str(make_source_image(hass))
-    )
+    filename = await media_store.async_store_image("pets", str(make_source_image(hass)))
     record = await storage.async_add_record(
         "pets", {"front": filename, "back": filename}
     )
