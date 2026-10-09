@@ -552,7 +552,7 @@ class CustomRecordsCard extends HTMLElement {
             return;
         }
         const dialog = this._dialogEl;
-        if (!dialog.querySelector("form").reportValidity()) {
+        if (!this._reportDialogValidity()) {
             return;
         }
         const configGeneration = this._configGeneration;
@@ -747,17 +747,11 @@ class CustomRecordsCard extends HTMLElement {
         this._imagePendingUploads = {};
         const formFields = this._recordType.fields
             .map((field) => {
-                const wrapperClass =
-                    field.type === "boolean"
-                        ? "field-boolean"
-                        : field.type === "image"
-                            ? "field-image"
-                            : "field";
-                return `<div class="${wrapperClass}">${this._renderFieldInput(field)}</div>`;
+                return this._renderFieldInput(field);
             })
             .join("");
         const timestampField = record
-            ? `<div class="field"><label for="record-timestamp">Timestamp *</label><input id="record-timestamp" type="datetime-local" step="1" data-record-timestamp value="${escapeHtml(toDateTimeLocalValue(record.timestamp))}" required /></div>`
+            ? `<ha-input label="Timestamp" type="datetime-local" step="1" placeholder=" " data-record-timestamp value="${escapeHtml(toDateTimeLocalValue(record.timestamp))}" required></ha-input>`
             : "";
 
         const dialog = document.createElement("ha-dialog");
@@ -772,53 +766,15 @@ class CustomRecordsCard extends HTMLElement {
         // rather than introducing a scoping mechanism.
         dialog.innerHTML = `
       <style>
-        .cmc-add-form { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; row-gap: 8px; align-items: center; min-width: 280px; }
-        .cmc-add-form .field { display: contents; }
-        .cmc-add-form .field-boolean { grid-column: 1 / -1; }
-        .cmc-add-form .field-image { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
-        .cmc-image-field { display: flex; flex-direction: column; gap: 6px; }
-        .cmc-image-upload-block {
-          display: flex;
-          align-items: stretch;
-          border: 1px solid var(--outline-color, var(--divider-color));
-          border-radius: 8px;
-          overflow: hidden;
-          min-height: 40px;
-        }
-        .cmc-image-upload-block[hidden] { display: none; }
-        .cmc-image-upload-block .cmc-image-file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-        .cmc-image-upload-mode { display: contents; }
-        .cmc-image-upload-mode[hidden] { display: none; }
-        .cmc-image-choose-btn, .cmc-image-remove-btn, .cmc-image-mode-btn {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 4px;
-          margin: 0;
-          padding: 0 12px;
-          border: none;
-          background: transparent;
-          color: var(--primary-color);
-          font: inherit;
-          cursor: pointer;
-        }
-        .cmc-image-choose-btn:hover, .cmc-image-remove-btn:hover, .cmc-image-mode-btn:hover { background: var(--secondary-background-color); }
-        .cmc-image-choose-btn:focus-visible, .cmc-image-remove-btn:focus-visible, .cmc-image-mode-btn:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
-        .cmc-image-remove-btn, .cmc-image-mode-btn { color: var(--secondary-text-color); padding: 0 10px; }
-        .cmc-image-remove-btn ha-icon, .cmc-image-mode-btn ha-icon { --mdc-icon-size: 20px; }
-        .cmc-image-upload-divider { align-self: stretch; width: 1px; background: var(--divider-color); flex-shrink: 0; }
-        .cmc-image-upload-filename-wrap { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 0 8px; }
-        .cmc-image-upload-preview { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; display: block; flex-shrink: 0; }
-        .cmc-image-upload-preview[hidden] { display: none; }
-        .cmc-image-upload-filename { color: var(--secondary-text-color); font-size: 0.9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .cmc-image-path-input { flex: 1; min-width: 0; padding: 0 12px; border: none; background: transparent; font: inherit; color: inherit; outline: none; }
-        .cmc-image-path-input:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
-        .cmc-image-remove-wrap { display: flex; align-items: stretch; }
-        .cmc-image-remove-wrap[hidden] { display: none; }
-        .cmc-field-hint { grid-column: 1 / -1; margin: 0; color: var(--secondary-text-color); font-size: 0.9em; }
-        .cmc-field-hint[hidden] { display: none; }
-        .cmc-dialog-error { grid-column: 1 / -1; color: var(--error-color, red); margin: 0; }
-        .cmc-native-submit { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+        .cmc-add-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ha-space-4, 16px); width: 100%; min-width: 0; }
+        .cmc-image-field { min-width: 0; }
+        .cmc-image-field ha-icon-button { --ha-icon-button-size: 32px; }
+        .cmc-add-form ha-input, .cmc-add-form ha-form { width: 100%; min-width: 0; }
+        .cmc-image-upload-mode { display: flex; align-items: center; }
+        .cmc-add-form [hidden] { display: none; }
+        .cmc-image-upload-preview { width: 28px; height: 28px; object-fit: cover; border-radius: var(--ha-border-radius-sm, 4px); }
+        .cmc-dialog-error { color: var(--error-color); margin: 0; }
+        .cmc-native-submit, .cmc-image-file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
       </style>
       <form class="cmc-add-form">
         ${timestampField}
@@ -834,16 +790,41 @@ class CustomRecordsCard extends HTMLElement {
 
         // Escape key / backdrop click both fire "closed" natively (mwc-dialog
         // behavior) - just need to detach/clean up when that happens.
-        dialog.addEventListener("closed", () => this._closeDialog());
+        dialog.addEventListener("closed", () => {
+            if (this._dialogEl === dialog) {
+                this._closeDialog();
+            }
+        });
 
         const form = dialog.querySelector("form");
         form.addEventListener("submit", (event) => this._handleSubmit(event));
         dialog.querySelector(".cmc-submit-btn").addEventListener("click", () => form.requestSubmit());
+        form.addEventListener("keydown", (event) => {
+            if (
+                event.key === "Enter" && !event.isComposing && !event.defaultPrevented &&
+                event.composedPath().some((element) => element.localName === "ha-input") &&
+                !event.composedPath().some((element) => element.localName === "ha-button" || element.localName === "ha-icon-button")
+            ) {
+                event.preventDefault();
+                form.requestSubmit();
+            }
+        });
         form.querySelectorAll("[data-key]").forEach((input) => {
             const key = input.dataset.key;
-            const isCheckbox = input.type === "checkbox";
-            const isMultiSelect = input.tagName === "SELECT" && input.multiple;
-            input.addEventListener("change", this._handleInputChange(key, isCheckbox, isMultiSelect));
+            const field = this._recordType.fields.find((field) => field.key === key);
+            if (input.localName === "ha-form") {
+                this._configureFieldForm(input, field);
+            } else {
+                const handleChange = () => {
+                    if (!input.readonly) {
+                        this._formValues[key] = input.value;
+                        input.invalid = false;
+                        input.validationMessage = "";
+                    }
+                };
+                input.addEventListener("input", handleChange);
+                input.addEventListener("change", handleChange);
+            }
         });
         this._recordType.fields
             .filter((field) => field.type === "image")
@@ -866,7 +847,12 @@ class CustomRecordsCard extends HTMLElement {
         this._recordType.fields
             .filter((field) => field.type === "image")
             .forEach((field) => this._updateRemoveVisibility(field));
-        form.querySelectorAll("select[data-key]").forEach((input) => this._validateSelectInput(input));
+        form.querySelectorAll("ha-form[data-key]").forEach((input) => {
+            const field = this._recordType.fields.find((field) => field.key === input.dataset.key);
+            if (field.type === "single_select" || field.type === "multi_select") {
+                this._validateSelectInput(input, field);
+            }
+        });
         dialog.open = true;
     }
 
@@ -1125,37 +1111,98 @@ class CustomRecordsCard extends HTMLElement {
         });
     }
 
-    _handleInputChange(key, isCheckbox, isMultiSelect) {
-        return (event) => {
-            if (isCheckbox) {
-                this._formValues[key] = event.target.checked;
-            } else if (isMultiSelect) {
-                this._formValues[key] = Array.from(event.target.selectedOptions)
-                    .map((option) => option.value)
-                    .filter((value) => value !== "");
-            } else {
-                this._formValues[key] = event.target.value;
+    _configureFieldForm(input, field) {
+        let schema;
+        if (field.type === "boolean") {
+            schema = { type: "boolean" };
+        } else if (field.type === "single_select" || field.type === "multi_select") {
+            const configuredOptions = field.options || [];
+            const value = this._formValues[field.key];
+            const storedValues = Array.isArray(value) ? value : value == null ? [] : [value];
+            const historicalOptions = this._editingRecord
+                ? storedValues.filter((option) => !configuredOptions.includes(option))
+                : [];
+            schema = {
+                selector: {
+                    select: {
+                        mode: "dropdown",
+                        multiple: field.type === "multi_select",
+                        options: [...new Set([...configuredOptions, ...historicalOptions])].map((option) => ({
+                            value: option,
+                            label: `${option}${configuredOptions.includes(option) ? "" : " (no longer available)"}`,
+                        })),
+                    },
+                },
+            };
+        } else if (field.type === "number") {
+            schema = { selector: { number: { mode: "box", step: "any" } } };
+        } else {
+            schema = { selector: { text: { multiline: field.type === "long_text" } } };
+        }
+        input.hass = this._hass;
+        input.schema = [{ name: field.key, required: !!field.required, ...schema }];
+        input.data = { [field.key]: this._formValues[field.key] };
+        input.computeLabel = () => `${field.label}${field.type === "boolean" && field.required ? " *" : ""}`;
+        input.addEventListener("value-changed", (event) => {
+            event.stopPropagation();
+            this._formValues[field.key] = event.detail.value[field.key];
+            input.data = { [field.key]: this._formValues[field.key] };
+            if (field.type === "single_select" || field.type === "multi_select") {
+                this._validateSelectInput(input, field);
             }
-            if (event.target.tagName === "SELECT") {
-                this._validateSelectInput(event.target);
-            }
-        };
+        });
     }
 
-    _validateSelectInput(input) {
-        const unavailable = Array.from(input.selectedOptions)
-            .filter((option) => option.hasAttribute("data-historical"))
-            .map((option) => option.value);
-        const instruction = input.required
+    _validateSelectInput(input, field, submitting = false) {
+        const value = this._formValues[field.key];
+        const selected = Array.isArray(value) ? value : value == null || value === "" ? [] : [value];
+        const unavailable = selected.filter((option) => !(field.options || []).includes(option));
+        const instruction = field.required
             ? "Choose current values before saving."
             : "Choose current values or clear the field before saving.";
         const message = unavailable.length
             ? `Saved values are no longer available: ${unavailable.join(", ")}. ${instruction}`
-            : "";
-        input.setCustomValidity(message);
-        const hint = this._dialogEl.querySelector(`[data-select-help-key="${input.dataset.key}"]`);
-        hint.textContent = message;
-        hint.hidden = !message;
+            : submitting && field.required && !selected.length
+                ? `${field.label} is required.`
+                : "";
+        input.error = message ? { [field.key]: message } : {};
+        return !message;
+    }
+
+    _reportDialogValidity() {
+        let valid = true;
+        let firstInvalid;
+        const timestamp = this._dialogEl.querySelector("[data-record-timestamp]");
+        if (timestamp && !timestamp.reportValidity()) {
+            valid = false;
+            firstInvalid = timestamp;
+        }
+        for (const field of this._recordType.fields) {
+            const input = this._dialogEl.querySelector(`[data-key="${field.key}"]`);
+            let fieldValid;
+            if (field.type === "image") {
+                const uploadMode = this._dialogEl.querySelector(`[data-image-upload-mode-key="${field.key}"]`);
+                const hasValue = !!this._existingImageValues[field.key] ||
+                    (!uploadMode.hidden ? !!this._imagePendingUploads[field.key] : !!input.value);
+                fieldValid = !field.required || hasValue;
+                const message = fieldValid ? "" : `${field.label} is required.`;
+                input.invalid = !fieldValid;
+                input.validationMessage = message;
+                if (!fieldValid) {
+                    this._setDialogError(message);
+                }
+            } else if (field.type === "single_select" || field.type === "multi_select") {
+                fieldValid = this._validateSelectInput(input, field, true);
+            } else {
+                fieldValid = input.reportValidity();
+            }
+            if (!fieldValid) {
+                valid = false;
+                firstInvalid ||= input;
+            }
+        }
+        firstInvalid?.focus();
+        return valid;
     }
 
     /**
@@ -1203,9 +1250,12 @@ class CustomRecordsCard extends HTMLElement {
             if (previewEl) {
                 previewEl.src = previewUrl;
                 previewEl.hidden = false;
+                previewEl.slot = "start";
             }
             if (filenameEl) {
-                filenameEl.textContent = file.name;
+                filenameEl.value = file.name;
+                filenameEl.invalid = false;
+                filenameEl.validationMessage = "";
             }
             this._updateRemoveVisibility(field);
         };
@@ -1240,15 +1290,19 @@ class CustomRecordsCard extends HTMLElement {
             if (this._existingImageValues[field.key] && existingUrl) {
                 previewEl.src = existingUrl;
                 previewEl.hidden = false;
+                previewEl.slot = "start";
             } else {
                 previewEl.hidden = true;
+                previewEl.slot = "";
                 previewEl.removeAttribute("src");
             }
         }
         if (filenameEl) {
-            filenameEl.textContent = this._existingImageValues[field.key]
+            filenameEl.value = this._existingImageValues[field.key]
                 ? "Existing image"
                 : "No file chosen";
+            filenameEl.invalid = false;
+            filenameEl.validationMessage = "";
         }
         this._updateRemoveVisibility(field);
     }
@@ -1290,10 +1344,6 @@ class CustomRecordsCard extends HTMLElement {
         if (uploadMode && !uploadMode.hidden) {
             delete this._existingImageValues[field.key];
             this._clearImageUpload(field);
-            const fileInput = dialog.querySelector(`[data-image-file-key="${field.key}"]`);
-            if (fileInput) {
-                fileInput.required = !!field.required;
-            }
             return;
         }
         const pathInput = dialog.querySelector(`[data-image-path-mode-key="${field.key}"]`);
@@ -1302,7 +1352,8 @@ class CustomRecordsCard extends HTMLElement {
         }
         delete this._formValues[field.key];
         delete this._existingImageValues[field.key];
-        pathInput.required = !!field.required;
+        pathInput.invalid = false;
+        pathInput.validationMessage = "";
         this._updateRemoveVisibility(field);
     }
 
@@ -1311,13 +1362,11 @@ class CustomRecordsCard extends HTMLElement {
      * (upload, the default, and manual path entry), both living inside the
      * SAME bordered control - only the leading mode-switch icon button and
      * the shared clear ("x") control stay constant; the middle section swaps
-     * between the file-choose UI and a blended-in text input. Switching away
+     * between the file-choose UI and an editable HA input. Switching away
      * from a mode clears its value (an unconsumed file is only ever local to
      * the browser at this point - see _handleSubmit() - so there's nothing
-     * server-side to clean up). `required` (native HTML constraint
-     * validation) moves to whichever input is currently active; the hidden
-     * one is automatically excluded from constraint validation per the HTML
-     * spec.
+     * server-side to clean up). Image validation checks the active mode
+     * explicitly, since the displayed filename is not itself a field value.
      */
     _toggleImageMode(field) {
         return () => {
@@ -1329,39 +1378,43 @@ class CustomRecordsCard extends HTMLElement {
             const pathInput = dialog.querySelector(`[data-image-path-mode-key="${field.key}"]`);
             const modeBtn = dialog.querySelector(`[data-image-mode-btn-key="${field.key}"]`);
             const modeIcon = modeBtn?.querySelector("ha-icon");
-            const fileInput = dialog.querySelector(`[data-image-file-key="${field.key}"]`);
+            const preview = dialog.querySelector(`[data-image-preview-key="${field.key}"]`);
             const switchingToPath = !uploadMode.hidden;
-            uploadMode.hidden = switchingToPath;
-            pathInput.hidden = !switchingToPath;
             if (switchingToPath) {
                 this._clearImageUpload(field);
-                if (fileInput) {
-                    fileInput.required = false;
-                }
-                pathInput.required =
-                    !!field.required && !this._existingImageValues[field.key];
+                uploadMode.hidden = true;
+                uploadMode.slot = "";
+                preview.hidden = true;
+                preview.slot = "";
+                pathInput.readonly = false;
+                pathInput.value = "";
+                pathInput.placeholder = "/config/www/photo.jpg";
                 modeIcon?.setAttribute("icon", "mdi:folder-open");
                 modeBtn?.setAttribute("aria-label", "Switch to uploading a file");
                 modeBtn?.setAttribute("title", "Switch to uploading a file");
+                modeBtn.label = "Switch to uploading a file";
                 pathInput.focus();
             } else {
-                pathInput.value = "";
-                pathInput.required = false;
+                uploadMode.hidden = false;
+                uploadMode.slot = "start";
+                pathInput.readonly = true;
+                pathInput.placeholder = "";
                 delete this._formValues[field.key];
-                if (fileInput) {
-                    fileInput.required =
-                        !!field.required && !this._existingImageValues[field.key];
-                }
+                this._clearImageUpload(field);
                 modeIcon?.setAttribute("icon", "mdi:upload");
                 modeBtn?.setAttribute("aria-label", "Switch to entering a file path");
                 modeBtn?.setAttribute("title", "Switch to entering a file path");
+                modeBtn.label = "Switch to entering a file path";
             }
+            pathInput.invalid = false;
+            pathInput.validationMessage = "";
+            this._setDialogError(null);
             this._updateRemoveVisibility(field);
         };
     }
 
     _renderFieldInput(field) {
-        const label = `${escapeHtml(field.label)}${field.required ? " *" : ""}`;
+        const label = escapeHtml(field.label);
         const inputId = `field-${field.key}`;
         const required = field.required ? " required" : "";
         const value = this._formValues[field.key];
@@ -1371,57 +1424,24 @@ class CustomRecordsCard extends HTMLElement {
                 ? this._imageUrls[`${this._editingRecord.id}/${field.key}`]
                 : null;
             const hasExistingImage = !!this._existingImageValues[field.key];
-            const imageRequired = field.required && !hasExistingImage ? " required" : "";
-            return `<label id="${inputId}-label">${label}</label>
-<div class="cmc-image-field" data-image-field-key="${field.key}">
-  <div class="cmc-image-upload-block" data-image-control-key="${field.key}">
-    <button type="button" class="cmc-image-mode-btn" data-image-mode-btn-key="${field.key}" aria-label="Switch to entering a file path" title="Switch to entering a file path"><ha-icon icon="mdi:upload"></ha-icon></button>
-    <span class="cmc-image-upload-divider"></span>
-    <span class="cmc-image-upload-mode" data-image-upload-mode-key="${field.key}">
-      <input type="file" class="cmc-image-file-input" accept="${IMAGE_UPLOAD_ACCEPT}" data-image-file-key="${field.key}"${imageRequired} aria-labelledby="${inputId}-label" />
-      <button type="button" class="cmc-image-choose-btn" data-image-choose-key="${field.key}">Choose file</button>
-      <span class="cmc-image-upload-divider"></span>
-      <span class="cmc-image-upload-filename-wrap">
-        <img class="cmc-image-upload-preview" data-image-preview-key="${field.key}" alt=""${hasExistingImage && existingUrl ? ` src="${escapeHtml(existingUrl)}"` : " hidden"} />
-        <span class="cmc-image-upload-filename" data-image-filename-key="${field.key}">${hasExistingImage ? "Existing image" : "No file chosen"}</span>
-      </span>
+            return `<div class="cmc-image-field" data-image-field-key="${field.key}">
+  <input type="file" class="cmc-image-file-input" accept="${IMAGE_UPLOAD_ACCEPT}" data-image-file-key="${field.key}" aria-label="${label}" tabindex="-1" />
+  <ha-input id="${inputId}" label="${label}" data-key="${field.key}" data-image-path-mode-key="${field.key}" data-image-filename-key="${field.key}" value="${hasExistingImage ? "Existing image" : "No file chosen"}" readonly${required}>
+    <ha-icon-button slot="start" data-image-mode-btn-key="${field.key}" label="Switch to entering a file path" title="Switch to entering a file path"><ha-icon icon="mdi:upload"></ha-icon></ha-icon-button>
+    <span slot="start" class="cmc-image-upload-mode" data-image-upload-mode-key="${field.key}">
+      <ha-button type="button" appearance="plain" size="s" data-image-choose-key="${field.key}">Choose file</ha-button>
     </span>
-    <input type="text" class="cmc-image-path-input" data-key="${field.key}" data-image-path-mode-key="${field.key}" aria-labelledby="${inputId}-label"${valueAttribute} placeholder="Full path to an existing image file under /config, e.g. /config/www/photo.jpg" hidden />
-    <div class="cmc-image-remove-wrap" data-image-remove-wrap-key="${field.key}" hidden>
-      <span class="cmc-image-upload-divider"></span>
-      <button type="button" class="cmc-image-remove-btn" data-image-remove-key="${field.key}" aria-label="Clear selection"><ha-icon icon="mdi:close"></ha-icon></button>
+    <img class="cmc-image-upload-preview" data-image-preview-key="${field.key}" alt=""${hasExistingImage && existingUrl ? ` slot="start" src="${escapeHtml(existingUrl)}"` : " hidden"} />
+    <div slot="end" data-image-remove-wrap-key="${field.key}" hidden>
+      <ha-icon-button data-image-remove-key="${field.key}" label="Clear selection"><ha-icon icon="mdi:close"></ha-icon></ha-icon-button>
     </div>
-  </div>
+  </ha-input>
 </div>`;
         }
-        if (field.type === "long_text") {
-            return `<label for="${inputId}">${label}</label><textarea id="${inputId}" data-key="${field.key}"${required}>${value === undefined || value === null ? "" : escapeHtml(value)}</textarea>`;
-        }
-        if (field.type === "boolean") {
-            return `<label><input type="checkbox" data-key="${field.key}"${value ? " checked" : ""}${field.required ? ' aria-required="true"' : ""} /> ${label}</label>`;
-        }
         if (field.type === "datetime") {
-            return `<label for="${inputId}">${label}</label><input id="${inputId}" type="datetime-local" step="1" data-key="${field.key}"${valueAttribute}${required} />`;
+            return `<ha-input id="${inputId}" label="${label}" type="datetime-local" step="1" placeholder=" " data-key="${field.key}"${valueAttribute}${required}></ha-input>`;
         }
-        if (field.type === "single_select" || field.type === "multi_select") {
-            const configuredOptions = field.options || [];
-            const storedValues = Array.isArray(value) ? value : value == null ? [] : [value];
-            const historicalOptions = this._editingRecord
-                ? storedValues.filter((option) => !configuredOptions.includes(option))
-                : [];
-            const options = [...new Set([...configuredOptions, ...historicalOptions])]
-                .map((option) => {
-                    const selected = Array.isArray(value) ? value.includes(option) : value === option;
-                    const historical = !configuredOptions.includes(option);
-                    return `<option value="${escapeHtml(option)}"${selected ? " selected" : ""}${historical ? " data-historical" : ""}>${escapeHtml(option)}${historical ? " (no longer available)" : ""}</option>`;
-                })
-                .join("");
-            const multiple = field.type === "multi_select" ? "multiple" : "";
-            return `<label for="${inputId}">${label}</label><select id="${inputId}" data-key="${field.key}" ${multiple}${required} aria-describedby="${inputId}-help"><option value=""></option>${options}</select><p id="${inputId}-help" class="cmc-field-hint" data-select-help-key="${field.key}" hidden></p>`;
-        }
-        const inputType = field.type === "number" ? "number" : "text";
-        const step = field.type === "number" ? ` step="any"` : "";
-        return `<label for="${inputId}">${label}</label><input id="${inputId}" type="${inputType}" data-key="${field.key}"${step}${valueAttribute}${required} />`;
+        return `<ha-form id="${inputId}" data-key="${field.key}"></ha-form>`;
     }
 
     _imageOverlayEntries(record) {
