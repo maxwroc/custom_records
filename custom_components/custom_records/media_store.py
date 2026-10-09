@@ -363,7 +363,7 @@ class MediaStore:
                 return await record_storage.async_add_record(
                     record_type.id, resolved, timestamp
                 )
-            except BaseException:
+            except Exception:
                 for filename in copied_filenames:
                     await self.async_delete_image(record_type.id, filename)
                 raise
@@ -409,7 +409,7 @@ class MediaStore:
                 updated = await record_storage.async_update_record(
                     record_type.id, record_id, validated_fields, timestamp
                 )
-            except BaseException:
+            except Exception:
                 for filename in copied_filenames:
                     await self.async_delete_image(record_type.id, filename)
                 raise

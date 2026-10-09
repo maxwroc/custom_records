@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
+from threading import Event
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -307,6 +309,67 @@ async def test_failed_record_update_removes_copied_image(
     media_dir = Path(hass.config.path(".storage", DOMAIN, entry_id, "media", "pets"))
     assert await hass.async_add_executor_job(_directory_entries, media_dir) == []
     await storage.async_close()
+
+
+@pytest.mark.parametrize("operation", ["add", "update"])
+async def test_cancelled_record_write_preserves_committed_image(
+    hass: HomeAssistant, entry_id: str, operation: str
+) -> None:
+    """Cancelling a running database write must not delete its staged image."""
+    media_store = MediaStore(hass, entry_id)
+    storage = RecordStorage(hass, entry_id)
+    record_type = _image_record_type()
+    await storage.async_load({"pets": record_type})
+    original = await storage.async_add_record("pets", {})
+    fields = {"front": str(make_source_image(hass))}
+    write_started = asyncio.Event()
+    release_write = Event()
+
+    def _pause_write(statement: str) -> None:
+        if statement.startswith(("INSERT INTO", "UPDATE")):
+            hass.loop.call_soon_threadsafe(write_started.set)
+            release_write.wait()
+
+    connection = storage._require_conn()  # noqa: SLF001
+    await storage._run(connection.set_trace_callback, _pause_write)  # noqa: SLF001
+    write = (
+        media_store.async_add_record_with_images(storage, record_type, fields)
+        if operation == "add"
+        else media_store.async_update_record_with_images(
+            storage, record_type, original["id"], fields
+        )
+    )
+    task = asyncio.create_task(write)
+    try:
+        try:
+            async with asyncio.timeout(5):
+                await write_started.wait()
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+        finally:
+            release_write.set()
+            if not task.done():
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+        await storage._run(connection.set_trace_callback, None)  # noqa: SLF001
+        references = await storage.async_list_image_references("pets")
+        assert len(references) == 1
+        image_path = await media_store.async_resolve_image_path(
+            "pets", references[0].filenames["front"]
+        )
+        assert image_path.is_file()
+        assert await storage.async_record_count("pets") == (
+            2 if operation == "add" else 1
+        )
+        if operation == "update":
+            assert references[0].record_id == original["id"]
+        else:
+            assert await storage.async_get_record("pets", original["id"]) == original
+    finally:
+        await storage.async_close()
 
 
 async def test_unchanged_images_skip_all_cleanup_work(
